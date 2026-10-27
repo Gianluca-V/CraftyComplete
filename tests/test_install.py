@@ -99,6 +99,10 @@ class Store(World):
         super().__init__(**kwargs)
         self.cdn_override: dict[str, bytes] = {}
         self.upload_error: tuple[int, str] | None = None
+        self.delete_error: tuple[int, str] | None = None
+        # Fail only the n-th upload (1-based); None = every upload when upload_error is set.
+        self.fail_upload_number: int | None = None
+        self.upload_count = 0
         self.latest = {FABRIC_SHA: {"id": "fa-2", "project_id": "P1",
                                     "version_number": "0.92.12"},
                        SODIUM_SHA: {"id": "so-1", "project_id": "P2", "version_number": "0.5.0"}}
@@ -121,7 +125,8 @@ class Store(World):
     def _crafty(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
         if path == f"/api/v2/servers/{SERVER}/files/upload":
-            if self.upload_error:
+            self.upload_count += 1
+            if self.upload_error and self.fail_upload_number in (None, self.upload_count):
                 status, error = self.upload_error
                 return httpx.Response(status, json={"status": "error", "error": error})
             assert "chunked" not in request.headers, "Crafty treats any chunked header as true"
@@ -132,6 +137,9 @@ class Store(World):
             return httpx.Response(200, json={"status": "completed",
                                              "data": {"message": "File uploaded successfully"}})
         if request.method == "DELETE" and path == f"/api/v2/servers/{SERVER}/files":
+            if self.delete_error:
+                status, error = self.delete_error
+                return httpx.Response(status, json={"status": "error", "error": error})
             for item in json.loads(request.content)["file_system_objects"]:
                 self.files.pop(item["filename"], None)
             return httpx.Response(200, json={"status": "ok"})
@@ -437,6 +445,98 @@ def test_failed_update_keeps_the_old_jar(session, store):
     assert session.mods()["fabric-api.jar"]["version_id"] == "fa-1"
 
 
+def test_update_whose_old_jar_cannot_be_deleted_records_both_and_can_be_retried(session, store):
+    """Crafty answers 500 SERVER RUNNING when it cannot unlink a jar (e.g. locked on Windows)."""
+    store.delete_error = (500, "SERVER RUNNING")
+    response = update(session, "fabric-api.jar")
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": (
+        "Fabric API 0.92.12 was uploaded as fabric-api-0.92.12.jar, but Crafty could not "
+        "delete the old fabric-api.jar (SERVER RUNNING). Stop the server and update again, "
+        "or delete mods/fabric-api.jar yourself before restarting.")}
+    mods = session.mods()
+    assert mods["fabric-api-0.92.12.jar"]["version_id"] == "fa-2"
+    assert mods["fabric-api.jar"]["version_id"] == "fa-1"
+
+    store.delete_error = None
+    uploads_before = len(store.uploads())
+    retry = update(session, "fabric-api.jar")
+
+    assert retry.status_code == 200
+    assert len(store.uploads()) == uploads_before  # the new jar was already there
+    assert "mods/fabric-api.jar" not in store.files
+    assert "fabric-api.jar" not in session.mods()
+
+
+def test_update_all_reports_an_undeletable_old_jar_and_continues(store, db):
+    store.latest[SODIUM_SHA] = {"id": "so-2", "project_id": "P2", "version_number": "0.6.0"}
+    store.delete_error = (500, "SERVER RUNNING")
+    s = Session(store, db)
+    body = s.post(f"/api/servers/{SERVER}/update-all").json()
+    s.close()
+
+    assert [f["file_name"] for f in body["failed"]] == ["fabric-api.jar", "sodium.jar"]
+    assert "could not delete the old fabric-api.jar" in body["failed"][0]["reason"]
+
+
+def test_install_skips_non_ascii_file_names(session, store):
+    """Crafty takes the file name in an HTTP header, which must be ASCII."""
+    original = VERSIONS_BY_ID["cl-1"]["files"][0]["filename"]
+    VERSIONS_BY_ID["cl-1"]["files"][0]["filename"] = "clóth-config.jar"
+    try:
+        response = install(session, "P4")
+    finally:
+        VERSIONS_BY_ID["cl-1"]["files"][0]["filename"] = original
+
+    assert response.status_code == 200
+    assert response.json()["installed"] == []
+    assert response.json()["skipped"][0]["reason"] == (
+        "Its file name cannot be sent to Crafty; download it yourself and upload it to mods/.")
+    assert store.uploads() == []
+
+
+def test_update_all_reports_non_ascii_file_name_and_continues(store, db):
+    original = VERSIONS_BY_ID["fa-2"]["files"][0]["filename"]
+    VERSIONS_BY_ID["fa-2"]["files"][0]["filename"] = "fabric-apí.jar"
+    try:
+        s = Session(store, db)
+        response = s.post(f"/api/servers/{SERVER}/update-all")
+        s.close()
+    finally:
+        VERSIONS_BY_ID["fa-2"]["files"][0]["filename"] = original
+
+    assert response.status_code == 200
+    assert response.json()["failed"][0]["file_name"] == "fabric-api.jar"
+
+
+def test_install_uploads_dependencies_before_the_mod(session, store):
+    store.upload_error = (507, "NO STORAGE SPACE")
+    store.fail_upload_number = 2
+    response = install(session, "P3")
+
+    assert response.status_code == 502
+    assert "cloth-config-11.1.jar" in session.mods()
+    assert "lithium-0.11.2.jar" not in session.mods()
+
+
+def test_pin_waits_for_a_running_update(session, store):
+    lock = session.client.app.state.installer._locks(SERVER)
+    session.client.portal.call(lock.acquire)
+    import threading
+    result = {}
+    worker = threading.Thread(target=lambda: result.setdefault("r", session.client.patch(
+        f"/api/servers/{SERVER}/mods/sodium.jar", json={"pinned": True})))
+    worker.start()
+    worker.join(0.5)
+    still_waiting = worker.is_alive()
+    session.client.portal.call(lock.release)
+    worker.join(5)
+
+    assert still_waiting
+    assert result["r"].status_code == 200
+
+
 @pytest.mark.parametrize(
     ("file_name", "prepare", "status", "detail"),
     [("nope.jar", None, 404, "No adopted mod with that file name."),
@@ -523,6 +623,24 @@ def test_update_checker_survives_modrinth_outage(session, store):
 
     assert checked == 0
     assert session.mods()["fabric-api.jar"]["latest_version_id"] == "fa-2"
+
+
+def test_update_checker_continues_after_an_unexpected_error(session, store):
+    adoption = session.client.app.state.adoption
+    store_ = session.client.app.state.adoption_store
+    real_ids = store_.server_ids
+    store_.server_ids = lambda: ["broken", *real_ids()]
+    real_check = adoption.check_updates
+
+    async def flaky(server_id):
+        if server_id == "broken":
+            raise RuntimeError("boom")
+        return await real_check(server_id)
+
+    adoption.check_updates = flaky
+    checked = session.client.portal.call(session.client.app.state.update_checker.run_once)
+
+    assert checked == 1
 
 
 def test_scan_reports_when_updates_were_checked(session):

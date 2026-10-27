@@ -61,7 +61,7 @@ def create_app(
             app.state.crafty = None
 
         store = app.state.adoption_store = AdoptionStore(settings.database_path)
-        locks = ServerLocks()
+        locks = app.state.locks = ServerLocks()
         # Routes refuse to use these while Crafty is not configured (require_crafty);
         # the background update check only needs Modrinth and the store.
         adoption = app.state.adoption = AdoptionService(

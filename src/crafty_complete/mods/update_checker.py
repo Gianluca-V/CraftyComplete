@@ -26,6 +26,9 @@ class UpdateChecker:
             except CatalogError as exc:
                 logger.warning("Update check for server %s failed: %s", server_id, exc)
                 continue
+            except Exception:  # one broken server must not starve the others
+                logger.exception("Update check for server %s failed", server_id)
+                continue
             checked += 1
         return checked
 

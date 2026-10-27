@@ -87,7 +87,9 @@ async def pin(
         await adoption.ensure_file_access(session.crafty_token, server_id)
     except CraftyError as exc:
         raise _fail(request, session, exc) from exc
-    mod = request.app.state.adoption_store.set_pinned(server_id, file_name, body.pinned)
+    # Wait for a running scan or update, which rewrites this server's records.
+    async with request.app.state.locks(server_id):
+        mod = request.app.state.adoption_store.set_pinned(server_id, file_name, body.pinned)
     if mod is None:
         raise HTTPException(status_code=404, detail="No adopted mod with that file name.")
     return mod.to_dict()

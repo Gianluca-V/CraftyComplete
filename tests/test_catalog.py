@@ -178,6 +178,17 @@ def test_search_reports_modrinth_failure_as_bad_gateway():
     assert response.json() == {"detail": "Modrinth request failed: HTTP 500"}
 
 
+def test_search_keeps_the_generic_message_for_modrinth_404():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    with make_client(handler) as client:
+        response = client.get("/api/catalog/search")
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "Modrinth request failed: HTTP 404"}
+
+
 def test_search_reports_unreachable_modrinth_as_bad_gateway():
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("dns failure", request=request)

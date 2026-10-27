@@ -100,8 +100,14 @@ def _choose_version(versions: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 
 def _safe_file_name(name: str) -> bool:
+    """A plain jar name Crafty can receive: it travels in an (ASCII-only) HTTP header."""
     return (bool(name) and name.lower().endswith(".jar") and "/" not in name
-            and "\\" not in name and not name.startswith(".") and len(name) <= 255)
+            and "\\" not in name and ":" not in name and not name.startswith(".")
+            and len(name) <= 255 and name.isascii() and name.isprintable())
+
+
+UNSAFE_NAME_REASON = ("Its file name cannot be sent to Crafty; download it yourself and "
+                      "upload it to mods/.")
 
 
 class ModInstaller:
@@ -191,16 +197,25 @@ class ModInstaller:
 
     async def _write(self, token: str, server: AdoptedServer, item: Planned, data: bytes,
                      existing: set[str], replaces: InstalledMod | None = None) -> InstalledMod:
-        """Upload one jar (replacing `replaces` if given) and record it."""
+        """Upload one jar (replacing `replaces` if given) and record it.
+
+        The new jar is uploaded and recorded before the old one is deleted, so a failure
+        never leaves the mod missing; if the delete fails, both jars stay recorded and a
+        retry only has to delete the old one.
+        """
         name = item.file["filename"]
         old_name = replaces.file_name if replaces else None
-        if name != old_name and name in existing:
-            raise ModOperationError(409, f"{MODS_DIR}/{name} already exists.")
-        await self._crafty.upload_file(token, server.server_id, MODS_DIR, name, data)
-        if old_name and old_name != name:
-            # Only once the new jar is in place, so a failure never leaves the mod missing.
-            await self._crafty.delete_file(token, server.server_id, f"{MODS_DIR}/{old_name}")
         project, version = item.project, item.version
+        already_uploaded = False
+        if name != old_name and name in existing:
+            recorded = next((m for m in self._store.get(server.server_id).mods
+                             if m.file_name == name), None)
+            if not (recorded and recorded.project_id == project["id"]
+                    and recorded.version_id == version["id"]):
+                raise ModOperationError(409, f"{MODS_DIR}/{name} already exists.")
+            already_uploaded = True  # left behind by an update whose delete failed
+        if not already_uploaded:
+            await self._crafty.upload_file(token, server.server_id, MODS_DIR, name, data)
         mod = InstalledMod(
             file_name=name,
             sha1=item.file["hashes"].get("sha1") or hashlib.sha1(data).hexdigest(),
@@ -215,34 +230,57 @@ class ModInstaller:
             latest_version_id=version["id"],
             latest_version_number=version.get("version_number"),
         )
-        self._store.put_mod(server.server_id, mod, replaces=old_name)
+        same_name = old_name == name
+        self._store.put_mod(server.server_id, mod, replaces=old_name if same_name else None)
         existing.add(name)
+        if old_name and not same_name:
+            try:
+                await self._crafty.delete_file(
+                    token, server.server_id, f"{MODS_DIR}/{old_name}")
+            except CraftyError as exc:
+                if exc.state == "unauthorized":
+                    raise
+                raise ModOperationError(502, (
+                    f"{project['title']} {version.get('version_number')} was uploaded as "
+                    f"{name}, but Crafty could not delete the old {old_name} ({exc.message}). "
+                    f"Stop the server and update again, or delete {MODS_DIR}/{old_name} "
+                    "yourself before restarting.")) from exc
+            self._store.remove_mod(server.server_id, old_name)
         return mod
 
     async def _install_planned(self, token: str, server: AdoptedServer,
                                planned: list[Planned], outcome: Outcome) -> None:
-        """Download every planned jar first (any bad hash aborts), then upload them."""
+        """Download every planned jar first (any bad hash aborts), then upload them.
+
+        Dependencies are uploaded before the mods that need them (planning order reversed),
+        so a failure part-way never leaves a mod without its dependencies.
+        """
         downloadable = []
-        for item in planned:
+        for item in reversed(planned):
+            reason = None
             if not item.file.get("url", "").startswith(MODRINTH_CDN):
+                reason = "Not hosted on Modrinth; download it yourself and upload it to mods/."
+            elif not _safe_file_name(item.file.get("filename", "")):
+                reason = UNSAFE_NAME_REASON
+            if reason:
                 outcome.skipped.append(Skipped(
                     project_id=item.project["id"], title=item.project["title"],
                     file_name=item.file.get("filename"), url=item.file.get("url"),
-                    reason="Not hosted on Modrinth; download it yourself and upload it to mods/."))
+                    reason=reason))
                 continue
-            if not _safe_file_name(item.file.get("filename", "")):
-                raise ModOperationError(502, f"Modrinth returned an unsafe file name for "
-                                             f"{item.project['title']}.")
             downloadable.append(item)
         payloads = [await self._download(item) for item in downloadable]
 
         existing = {e.name for e in await self._crafty.list_dir(token, server.server_id, MODS_DIR)}
+        done = []
         for item, data in zip(downloadable, payloads):
             await self._write(token, server, item, data, existing)
-            outcome.installed.append(Installed(
+            done.append(Installed(
                 project_id=item.project["id"], title=item.project["title"],
                 version_number=item.version.get("version_number"),
                 file_name=item.file["filename"], dependency=item.dependency))
+        # Report in planning order: the requested mod first, then what it pulled in.
+        outcome.installed.extend(reversed(done))
 
     # --- install ------------------------------------------------------------
 
@@ -301,7 +339,8 @@ class ModInstaller:
             raise ModOperationError(
                 502, f"The new {title} is not hosted on Modrinth; update it by hand.")
         if not _safe_file_name(item.file.get("filename", "")):
-            raise ModOperationError(502, f"Modrinth returned an unsafe file name for {title}.")
+            raise ModOperationError(502, f"The new {title} has a file name Crafty cannot accept "
+                                         f"({item.file.get('filename')!r}); update it by hand.")
 
         planned_deps: dict[str, Planned] = {}
         await self._plan_dependencies(version, server, planned_deps, outcome)

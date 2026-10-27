@@ -87,7 +87,7 @@ class ModrinthProvider:
         except httpx.HTTPError as exc:
             raise CatalogError(f"Modrinth request failed: {exc}") from exc
         if response.status_code == 404:
-            raise CatalogNotFound(f"Modrinth has no {path}")
+            raise CatalogNotFound("Modrinth request failed: HTTP 404")
         if response.status_code >= 400:
             raise CatalogError(f"Modrinth request failed: HTTP {response.status_code}")
         return response.json()
