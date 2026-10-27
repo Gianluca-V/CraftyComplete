@@ -79,38 +79,33 @@ class ModpackUpdater:
         server = self._store.get(server_id)
         old = self._store.get_modpack_files(server_id)
         pack_path, index, new = await self._linker.pack_files(job, target, server, workdir)
-
-        added = sorted(p for p in new if p not in old)
-        changed = sorted(p for p in new if p in old and new[p] != old[p])
-        removed = sorted(p for p in old if p not in new and is_mod_jar(p))
-
-        # Pinned mods are the user's decision: leave them exactly as they are.
-        pinned = {f"mods/{m.file_name}" for m in server.mods if m.pinned}
-        kept_pinned = sorted(pinned & set(changed + removed + added))
-        for path in kept_pinned:
-            job.warnings.append(f"Kept your pinned {path}.")
-        added = [p for p in added if p not in pinned]
-        changed = [p for p in changed if p not in pinned]
-        removed = [p for p in removed if p not in pinned]
-
-        # A mod the user added themselves that the pack now ships would load twice.
-        displaced = await self._displaced_own_mods(job, server, old, new, added + changed)
-
-        files = await self._packs.fetch_files(job, index, pack_path, set(added + changed),
-                                              workdir)
+        incoming = sorted(p for p in new if p not in old or new[p] != old[p])
+        projects = await self._projects_of(new, incoming)
+        files = await self._packs.fetch_files(job, index, pack_path, set(incoming), workdir)
         backup = (f"{BACKUP_ROOT}/{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}-"
                   f"{_slug(server.modpack_version_number)}-to-"
                   f"{_slug(target.version.get('version_number'))}")
 
         async with self._locks(server_id):
-            moved = await self._apply(job, token, server_id, files,
-                                      changed + removed + displaced + added, backup)
+            # Decide on the state as it is now: the download can take minutes, and mods can
+            # be installed or pinned, or the server started, meanwhile.
+            if (await self._crafty.server_stats(token, server_id)).get("running"):
+                raise JobFailure("Stop the server in Crafty before updating its modpack.")
+            if self._store.get_modpack_files(server_id) != old:
+                raise JobFailure("The server's modpack changed during the download; "
+                                 "start the update again.")
+            server = self._store.get(server_id)
+            plan = self._plan(job, server, old, new, projects)
+            to_send = {p: f for p, f in files.items() if p not in plan["kept"]}
+            moved = await self._apply(job, token, server_id, to_send,
+                                      plan["updated"] + plan["removed"] + plan["displaced"]
+                                      + plan["added"], backup)
 
             hashes = {m.file_name: m.sha1 for m in server.mods
                       if f"mods/{m.file_name}" not in moved}
-            hashes.update({PurePosixPath(p).name: new[p] for p in files if is_mod_jar(p)})
+            hashes.update({PurePosixPath(p).name: new[p] for p in to_send if is_mod_jar(p)})
             remembered = dict(new)
-            for path in kept_pinned:  # still the pack's file, at the old version
+            for path in plan["kept"]:  # the server keeps what it had, if it was the pack's
                 if path in old:
                     remembered[path] = old[path]
                 else:
@@ -120,12 +115,12 @@ class ModpackUpdater:
             job.begin("Identifying mods")
             await self._adoption.record(server_id, hashes)
 
-        displaced_names = {PurePosixPath(p).name for p in displaced}
+        displaced_names = {PurePosixPath(p).name for p in plan["displaced"]}
         old_hashes = set(old.values())
         job.result = {
-            "added": added,
-            "updated": changed,
-            "removed": removed,
+            "added": plan["added"],
+            "updated": plan["updated"],
+            "removed": plan["removed"],
             "own_mods_kept": sorted(m.file_name for m in server.mods
                                     if m.sha1 not in old_hashes
                                     and m.file_name not in displaced_names
@@ -134,12 +129,37 @@ class ModpackUpdater:
             "restart_required": True,
         }
 
-    async def _displaced_own_mods(self, job: Job, server: AdoptedServer, old: dict,
-                                  new: dict, incoming: list[str]) -> list[str]:
-        new_jars = {p: new[p] for p in incoming if is_mod_jar(p) and new[p]}
-        versions = await self._modrinth.versions_by_sha1(sorted(set(new_jars.values())))
-        incoming_by_project = {versions[h]["project_id"]: p for p, h in new_jars.items()
-                               if h in versions}
+    async def _projects_of(self, new: dict, paths: list[str]) -> dict[str, str]:
+        """Modrinth project id of each pack jar at `paths` that Modrinth knows."""
+        jars = {p: new[p] for p in paths if is_mod_jar(p) and new[p]}
+        versions = await self._modrinth.versions_by_sha1(sorted(set(jars.values())))
+        return {p: versions[h]["project_id"] for p, h in jars.items() if h in versions}
+
+    @staticmethod
+    def _plan(job: Job, server: AdoptedServer, old: dict, new: dict,
+              projects: dict[str, str]) -> dict[str, list[str]]:
+        """What to add, update, remove, move aside and keep, from the server's current mods."""
+        added = sorted(p for p in new if p not in old)
+        updated = sorted(p for p in new if p in old and new[p] != old[p])
+        removed = sorted(p for p in old if p not in new and is_mod_jar(p))
+
+        # Pinned mods are the user's decision: leave them exactly as they are, and do not
+        # add the pack's copy of the same project under another file name either.
+        pinned = {f"mods/{m.file_name}": m for m in server.mods if m.pinned}
+        pinned_by_project = {m.project_id: path for path, m in pinned.items() if m.project_id}
+        kept = sorted(pinned.keys() & set(added + updated + removed))
+        for path in kept:
+            job.warnings.append(f"Kept your pinned {path}.")
+        for path in added + updated:
+            owner = pinned_by_project.get(projects.get(path))
+            if path not in pinned and owner:
+                kept.append(path)
+                job.warnings.append(f"Skipped the pack's {path}: you pinned {owner} "
+                                    "of the same project.")
+
+        # A mod the user added themselves that the pack now ships would load twice.
+        incoming_by_project = {projects[p]: p for p in added + updated
+                               if p in projects and p not in kept}
         old_hashes = set(old.values())
         displaced = []
         for mod in server.mods:
@@ -150,7 +170,10 @@ class ModpackUpdater:
                 job.warnings.append(
                     f"Moved your own {path} aside: the pack now ships "
                     f"{incoming_by_project[mod.project_id]} for the same project.")
-        return sorted(displaced)
+        return {"added": [p for p in added if p not in kept],
+                "updated": [p for p in updated if p not in kept],
+                "removed": [p for p in removed if p not in kept],
+                "displaced": sorted(displaced), "kept": kept}
 
     async def _apply(self, job: Job, token: str, server_id: str, files: dict[str, Path],
                      candidates: list[str], backup: str) -> set[str]:

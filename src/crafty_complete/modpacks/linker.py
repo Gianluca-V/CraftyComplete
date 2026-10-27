@@ -39,10 +39,13 @@ def newest_update(versions: list[dict[str, Any]],
                   current_id: str | None) -> dict[str, Any] | None:
     """The version to offer as an update, from `versions` listed newest first.
 
-    Only versions newer than the current one count. A release wins; with no newer release,
+    Only versions newer than the current one count; with the current one no longer listed,
+    nothing is offered. A release wins; with no newer release,
     a server already on a pre-release is offered the newest newer pre-release.
     """
     ids = [v["id"] for v in versions]
+    if current_id is not None and current_id not in ids:
+        return None  # an unlisted or deleted version: "newer" cannot be told apart
     newer = versions[:ids.index(current_id)] if current_id in ids else versions
     release = next((v for v in newer if v.get("version_type") == "release"), None)
     current = versions[ids.index(current_id)] if current_id in ids else None

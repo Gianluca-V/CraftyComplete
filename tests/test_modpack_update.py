@@ -3,6 +3,7 @@ import json
 import httpx
 import pytest
 
+from crafty_complete.mods.models import InstalledMod
 from tests.conftest import CRAFTY, log_in, make_client
 from tests.test_adoption import FILES, SERVER, sha1
 from tests.test_modpack import CreationFakes, build_mrpack, pack_file, wait_for
@@ -325,3 +326,85 @@ def test_only_newer_versions_count_as_updates(tmp_path, db, listed, latest):
             "detail": "A Pack 1.0.0 is the newest version for fabric 1.20.1."}
     else:
         assert response.status_code == 202
+
+
+def test_pinned_pack_mod_whose_file_name_changes_is_not_installed_twice(tmp_path, db):
+    fakes = UpdateFakes()
+    fakes.identified = {
+        sha1(FABRIC_API): {"id": "fa-1", "project_id": "P1", "version_number": "0.83.0",
+                           "loaders": ["fabric"], "game_versions": ["1.20.1"]},
+        sha1(FABRIC_API_NEW): {"id": "fa-2", "project_id": "P1", "version_number": "0.92.12",
+                               "loaders": ["fabric"], "game_versions": ["1.20.1"]},
+    }
+    client = linked_client(fakes, db, tmp_path)
+    client.patch(f"/api/servers/{SERVER}/mods/fabric-api.jar", json={"pinned": True})
+    job = wait_for(client, update(client, version_id=V2).json()["job_id"])
+    remembered = client.app.state.adoption_store.get_modpack_files(SERVER)
+    client.__exit__(None, None, None)
+
+    assert job["status"] == "succeeded", job
+    assert fakes.files["mods/fabric-api.jar"] == FABRIC_API
+    assert "mods/fabric-api-0.92.12.jar" not in fakes.files
+    assert "mods/fabric-api-0.92.12.jar" not in remembered
+    assert ("Skipped the pack's mods/fabric-api-0.92.12.jar: you pinned "
+            "mods/fabric-api.jar of the same project.") in job["warnings"]
+
+
+def test_mod_recorded_during_the_update_download_is_kept(tmp_path, db):
+    fakes = UpdateFakes()
+    client = linked_client(fakes, db, tmp_path)
+    store = client.app.state.adoption_store
+    added = {}
+
+    def install_during_download():
+        if not added:
+            added["done"] = True
+            fakes.files["mods/distant-horizons.jar"] = b"dh"
+            store.put_mod(SERVER, InstalledMod(file_name="distant-horizons.jar",
+                                               sha1=sha1(b"dh"), state="unknown"))
+
+    class Hooked(dict):
+        def __contains__(self, key):
+            if key == "new-mod.jar":
+                install_during_download()
+            return dict.__contains__(self, key)
+
+    fakes.cdn_extra = Hooked(fakes.cdn_extra)
+    job = wait_for(client, update(client, version_id=V2).json()["job_id"])
+    names = {m.file_name for m in store.get(SERVER).mods}
+    client.__exit__(None, None, None)
+
+    assert job["status"] == "succeeded", job
+    assert added
+    assert "distant-horizons.jar" in names
+    assert fakes.files["mods/distant-horizons.jar"] == b"dh"
+
+
+def test_server_started_during_the_download_is_not_touched(tmp_path, db):
+    fakes = UpdateFakes()
+    client = linked_client(fakes, db, tmp_path)
+
+    class Hooked(dict):
+        def __contains__(self, key):
+            if key == "new-mod.jar":
+                fakes.running = True
+            return dict.__contains__(self, key)
+
+    fakes.cdn_extra = Hooked(fakes.cdn_extra)
+    before = dict(fakes.files)
+    job = wait_for(client, update(client, version_id=V2).json()["job_id"])
+    linked = client.get(f"/api/servers/{SERVER}/modpack").json()["linked"]
+    client.__exit__(None, None, None)
+
+    assert job["status"] == "failed"
+    assert job["error"] == "Stop the server in Crafty before updating its modpack."
+    assert fakes.moves == []
+    assert fakes.files == before
+    assert linked["version_id"] == "pk-1"
+
+
+def test_no_update_is_offered_when_the_linked_version_is_gone():
+    from crafty_complete.modpacks.linker import newest_update
+    versions = [{"id": "b", "version_type": "release"}, {"id": "a", "version_type": "release"}]
+    assert newest_update(versions, "gone") is None
+    assert newest_update(versions, None)["id"] == "b"
