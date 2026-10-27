@@ -221,7 +221,11 @@ function bindEvents() {
   $("next").addEventListener("click", () => { state.page += 1; search(); window.scrollTo(0, 0); });
 
   $("logout").addEventListener("click", async () => {
-    await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    await fetch("/api/auth/logout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    }).catch(() => {});
     window.location.assign("/login");
   });
 

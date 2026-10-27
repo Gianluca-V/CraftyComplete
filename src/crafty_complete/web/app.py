@@ -14,7 +14,7 @@ from crafty_complete import __version__
 from crafty_complete.auth.sessions import SessionStore
 from crafty_complete.catalog.modrinth import ModrinthProvider
 from crafty_complete.config import Settings
-from crafty_complete.crafty.client import CraftyClient, CraftyStatus
+from crafty_complete.crafty.client import CookielessTransport, CraftyClient, CraftyStatus
 from crafty_complete.web.auth_routes import router as auth_router
 from crafty_complete.web.catalog_routes import router as catalog_router
 from crafty_complete.web.deps import current_session, require_session
@@ -44,9 +44,10 @@ def create_app(
         if settings.crafty_url:
             crafty_http = httpx.AsyncClient(
                 base_url=settings.crafty_url.rstrip("/"),
-                verify=settings.crafty_verify_tls,
                 timeout=settings.http_timeout_seconds,
-                transport=transport,
+                transport=CookielessTransport(
+                    transport or httpx.AsyncHTTPTransport(verify=settings.crafty_verify_tls)
+                ),
             )
             app.state.crafty = CraftyClient(crafty_http)
         else:
@@ -56,7 +57,9 @@ def create_app(
         if crafty_http:
             await crafty_http.aclose()
 
-    app = FastAPI(title="craftyComplete", version=__version__, lifespan=lifespan)
+    # Interactive API docs would be the only pages reachable without a session.
+    app = FastAPI(title="craftyComplete", version=__version__, lifespan=lifespan,
+                  docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings = settings
     app.state.sessions = SessionStore(
         idle_seconds=settings.session_idle_minutes * 60,

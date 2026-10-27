@@ -38,6 +38,29 @@ class CraftyUser:
     superuser: bool
 
 
+class CookielessTransport(httpx.AsyncBaseTransport):
+    """Strip cookies in both directions.
+
+    Crafty's login also sets a `token` cookie holding the user's JWT. The Crafty HTTP
+    client is shared by every user, so a stored cookie would ride along on other
+    users' requests. Identity must come only from the per-request Authorization header.
+    """
+
+    def __init__(self, inner: httpx.AsyncBaseTransport):
+        self._inner = inner
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        if "cookie" in request.headers:
+            del request.headers["cookie"]
+        response = await self._inner.handle_async_request(request)
+        if "set-cookie" in response.headers:
+            del response.headers["set-cookie"]
+        return response
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+
 def _json(response: httpx.Response) -> dict[str, Any]:
     try:
         body = response.json()

@@ -47,8 +47,19 @@ class SessionStore:
             last_seen=now,
         )
         with self._lock:
+            self._sweep(now)
             self._sessions[session.id] = session
         return session
+
+    def _sweep(self, now: float) -> None:
+        """Drop expired sessions so abandoned ones do not accumulate. Caller holds the lock."""
+        expired = [sid for sid, s in self._sessions.items() if self._expired(s, now)]
+        for sid in expired:
+            del self._sessions[sid]
+
+    def _expired(self, session: Session, now: float) -> bool:
+        return (now - session.last_seen > self._idle_seconds
+                or now - session.created_at > self._max_seconds)
 
     def get(self, session_id: str | None) -> Session | None:
         """Return the live session and refresh its idle timer, or None."""
@@ -59,8 +70,7 @@ class SessionStore:
             session = self._sessions.get(session_id)
             if session is None:
                 return None
-            if (now - session.last_seen > self._idle_seconds
-                    or now - session.created_at > self._max_seconds):
+            if self._expired(session, now):
                 del self._sessions[session_id]
                 return None
             session.last_seen = now

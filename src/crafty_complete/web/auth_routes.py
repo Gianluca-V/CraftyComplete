@@ -48,11 +48,18 @@ async def login(
     except CraftyLoginError as exc:
         raise _login_error(exc) from exc
     except CraftyError as exc:
+        if exc.state == "unauthorized":
+            # Crafty issued a token but refuses to honour it, e.g. 2FA is enforced.
+            raise HTTPException(
+                status_code=403,
+                detail="Crafty refused access to this account (it may require 2FA to be set up).",
+            ) from exc
         detail = "Crafty is unreachable." if exc.state == "unreachable" else (
             f"Crafty login failed: {exc.message}")
         raise HTTPException(status_code=502, detail=detail) from exc
 
     settings = request.app.state.settings
+    sessions(request).delete(request.cookies.get(SESSION_COOKIE))
     session = sessions(request).create(
         crafty_token=token, user_id=user.user_id, username=user.username,
         superuser=user.superuser,
@@ -72,6 +79,9 @@ async def login(
 
 @router.post("/auth/logout", status_code=204)
 async def logout(request: Request, response: Response) -> None:
+    # A JSON content type cannot be sent cross-site without a CORS preflight.
+    if request.headers.get("content-type", "").split(";")[0].strip() != "application/json":
+        raise HTTPException(status_code=415, detail="Send logout as a JSON request.")
     # Only the companion session ends: revoking Crafty tokens would also log the
     # user out of the Crafty panel itself.
     sessions(request).delete(request.cookies.get(SESSION_COOKIE))

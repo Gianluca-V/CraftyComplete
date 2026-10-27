@@ -38,15 +38,15 @@ Environment variables (or a `.env` file in the working directory):
 | `CRAFTY_COMPLETE_HTTP_TIMEOUT_SECONDS` | `10` | Timeout for outbound HTTP calls |
 | `CRAFTY_COMPLETE_SESSION_IDLE_MINUTES` | `60` | Log out after this much inactivity |
 | `CRAFTY_COMPLETE_SESSION_MAX_HOURS` | `12` | Maximum session lifetime |
-| `CRAFTY_COMPLETE_SESSION_COOKIE_SECURE` | auto | `true`/`false` forces the cookie's `Secure` flag; by default it is set when the request arrived over HTTPS |
+| `CRAFTY_COMPLETE_SESSION_COOKIE_SECURE` | auto | `true`/`false` forces the cookie's `Secure` flag; by default it is set when the request arrived over HTTPS. Behind a reverse proxy that terminates TLS, set it to `true` (or run uvicorn with `--proxy-headers`). |
 
 ## API
 
-Everything except `/api/health`, `/login` and `/api/auth/login` requires a session; without one, APIs answer `401` and pages redirect to `/login`.
+Everything except `/api/health`, `/login` and `/api/auth/login` requires a session; without one, APIs answer `401` and pages redirect to `/login`. FastAPI's interactive docs (`/docs`, `/redoc`, `/openapi.json`) are disabled.
 
 - `GET /api/health` — service status and Crafty connectivity (`not_configured`, `connected`, `unauthorized`, `unreachable`, `error`).
-- `POST /api/auth/login` — JSON body `{"username", "password", "totp"?}`. Answers `401` for wrong credentials or 2FA code, `403` for disabled accounts, `429` during Crafty's login cooldown, `502` when Crafty is unreachable, `503` when `CRAFTY_COMPLETE_CRAFTY_URL` is unset.
-- `POST /api/auth/logout` — ends the session (`204`).
+- `POST /api/auth/login` — JSON body `{"username", "password", "totp"?}`. Answers `401` for wrong credentials or 2FA code, `403` for disabled accounts or accounts Crafty refuses (for example when it enforces 2FA setup), `429` during Crafty's login cooldown, `502` when Crafty is unreachable, `503` when `CRAFTY_COMPLETE_CRAFTY_URL` is unset.
+- `POST /api/auth/logout` — ends the session (`204`). Must be sent as JSON (`415` otherwise). Logging in again also ends the previous session.
 - `GET /api/me` — the logged-in user and their Crafty-wide permissions (`server_creation`, `user_config`, `roles_config`).
 - `GET /api/servers` — the Crafty servers this user can see: `server_id`, `server_name`, `type`.
 - `GET /api/catalog/search` — search Modrinth. Query parameters:

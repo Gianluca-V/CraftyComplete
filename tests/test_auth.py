@@ -267,13 +267,76 @@ def test_session_expires_after_absolute_lifetime(requests_seen):
 def test_logout_drops_session_without_revoking_crafty_tokens(requests_seen):
     with make_client(crafty_handler(requests_seen), crafty_url=CRAFTY) as client:
         log_in(client)
-        response = client.post("/api/auth/logout")
+        response = client.post("/api/auth/logout", json={})
         after = client.get("/api/me")
 
     assert response.status_code == 204
     assert f'{SESSION_COOKIE}=""' in response.headers["set-cookie"]
     assert after.status_code == 401
     assert all("invalidate" not in r.url.path for r in requests_seen)
+
+
+def test_crafty_login_cookies_are_never_replayed(requests_seen):
+    """Crafty's login also sets a `token` cookie; it must not leak into other calls."""
+    base = crafty_handler(requests_seen)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        response = base(request)
+        if request.url.path == "/api/v2/auth/login":
+            response.headers["Set-Cookie"] = f"token={USER_TOKEN}; Path=/"
+        return response
+
+    with make_client(handler, crafty_url=CRAFTY, crafty_api_token="service-token") as client:
+        login(client)
+        client.get("/api/servers")
+        client.get("/api/health")
+
+    assert len(requests_seen) == 4
+    assert all("cookie" not in request.headers for request in requests_seen)
+
+
+def test_login_replaces_the_previous_session(requests_seen):
+    with make_client(crafty_handler(requests_seen), crafty_url=CRAFTY) as client:
+        old_session = log_in(client)
+        login(client)
+
+        assert client.app.state.sessions.get(old_session) is None
+        assert client.app.state.sessions.count() == 1
+
+
+def test_login_reports_crafty_refusing_the_account(requests_seen):
+    """Crafty may issue a token and still refuse it, e.g. when it enforces 2FA."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v2/auth/login":
+            return httpx.Response(200, json={"status": "ok", "data": {"token": "t"}})
+        return httpx.Response(403, json={"status": "error", "error": "ACCESS_DENIED"})
+
+    with make_client(handler, crafty_url=CRAFTY) as client:
+        response = login(client)
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "detail": "Crafty refused access to this account (it may require 2FA to be set up)."
+    }
+    assert client.app.state.sessions.count() == 0
+
+
+def test_logout_requires_json_request(requests_seen):
+    with make_client(crafty_handler(requests_seen), crafty_url=CRAFTY) as client:
+        log_in(client)
+        response = client.post("/api/auth/logout", data={"x": "1"})
+
+        assert response.status_code == 415
+        assert client.get("/api/me").status_code == 200
+
+
+def test_api_docs_are_not_published(requests_seen):
+    with make_client(crafty_handler(requests_seen), crafty_url=CRAFTY) as client:
+        statuses = [client.get(path).status_code
+                    for path in ("/docs", "/redoc", "/openapi.json")]
+
+    assert statuses == [404, 404, 404]
 
 
 def test_session_cookie_secure_flag_follows_setting(requests_seen):
