@@ -10,6 +10,9 @@ CraftyState = Literal[
     "error",
 ]
 
+# A file name no real server contains; see CraftyClient.check_files_permission.
+PERMISSION_PROBE_PATH = ".crafty-complete-permission-check"
+
 # Index of each flag in Crafty's crafty-permissions mask (EnumPermissionsCrafty).
 CRAFTY_PERMISSIONS = ("server_creation", "user_config", "roles_config")
 
@@ -136,9 +139,34 @@ class CraftyClient:
             if name != "root_path" and isinstance(entry, dict)
         ]
 
+    @staticmethod
+    def _download_url(server_id: str, path: str) -> str:
+        # Crafty URL-decodes the path and then html-unescapes it, so a literal `&`
+        # must be sent as `&amp;` (otherwise `a&amp;b.jar` would become `a&b.jar`).
+        return f"/api/v2/servers/{server_id}/files/{quote(path.replace('&', '&amp;'), safe='')}/download"
+
+    async def check_files_permission(self, token: str, server_id: str) -> None:
+        """Raise CraftyError unless this user has the FILES permission on the server.
+
+        Listing a directory also succeeds with only the BACKUP permission, so this asks
+        for the download of a path that does not exist: Crafty checks FILES first and
+        answers 404 when it is granted, 400 NOT_AUTHORIZED when it is not.
+        """
+        url = self._download_url(server_id, PERMISSION_PROBE_PATH)
+        try:
+            async with self._http.stream(
+                "GET", url, headers={"Authorization": f"Bearer {token}"}
+            ) as response:
+                if response.status_code in (200, 404):
+                    return
+                await response.aread()
+                self._raise_for(response, _json(response))
+        except httpx.HTTPError as exc:
+            raise CraftyError("unreachable", str(exc)) from exc
+
     async def file_sha1(self, token: str, server_id: str, path: str) -> str:
         """Stream a server file through Crafty and return its SHA-1."""
-        url = f"/api/v2/servers/{server_id}/files/{quote(path, safe='')}/download"
+        url = self._download_url(server_id, path)
         digest = hashlib.sha1()
         try:
             async with self._http.stream(

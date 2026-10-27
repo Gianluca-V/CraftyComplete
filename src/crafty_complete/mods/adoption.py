@@ -53,8 +53,8 @@ class AdoptionService:
         self._store = store
 
     async def ensure_file_access(self, token: str, server_id: str) -> None:
-        """Raise CraftyError unless Crafty lets this user browse the server's files."""
-        await self._crafty.list_dir(token, server_id, "")
+        """Raise CraftyError unless this user has Crafty's FILES permission on the server."""
+        await self._crafty.check_files_permission(token, server_id)
 
     async def _hash_jars(self, token: str, server_id: str) -> dict[str, str]:
         root = await self._crafty.list_dir(token, server_id, "")
@@ -69,12 +69,18 @@ class AdoptionService:
             async with limit:
                 return await self._crafty.file_sha1(token, server_id, path)
 
-        hashes = await asyncio.gather(*(hash_one(jar.path) for jar in jars))
-        return {jar.name: sha1 for jar, sha1 in zip(jars, hashes)}
+        # A TaskGroup cancels the remaining downloads as soon as one fails.
+        try:
+            async with asyncio.TaskGroup() as group:
+                tasks = [group.create_task(hash_one(jar.path)) for jar in jars]
+        except ExceptionGroup as group_error:
+            raise group_error.exceptions[0] from None
+        return {jar.name: task.result() for jar, task in zip(jars, tasks)}
 
     async def scan(self, token: str, server_id: str, loader: str | None = None,
                    game_version: str | None = None) -> AdoptedServer:
         """(Re)scan the server. Nothing is saved unless every step succeeds."""
+        await self.ensure_file_access(token, server_id)
         previous = self._store.get(server_id)
         hashes = await self._hash_jars(token, server_id)
 
@@ -90,7 +96,9 @@ class AdoptionService:
         if versions and loader and game_version:
             latest = await self._modrinth.latest_versions(sorted(versions), loader, game_version)
 
-        pinned = {mod.pin_key for mod in previous.mods if mod.pinned}
+        # Re-read pins now: the user may have pinned something while Crafty and Modrinth
+        # were being queried.
+        pinned = {mod.pin_key for mod in self._store.get(server_id).mods if mod.pinned}
         mods = []
         for file_name, sha1 in hashes.items():
             version = versions.get(sha1)

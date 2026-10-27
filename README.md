@@ -55,7 +55,7 @@ Everything except `/api/health`, `/login` and `/api/auth/login` requires a sessi
 - `GET /api/servers/{server_id}/mods` — the stored result of the last scan (`adopted: false` before the first one). Each mod has `state` (`identified` or `unknown`), current and latest version, `update_available`, `pinned` and Modrinth's `server_side`; `counts.updates` excludes pinned mods.
 - `PATCH /api/servers/{server_id}/mods/{file_name}` — JSON `{"pinned": true|false}`. A pinned mod is never offered for update; the pin follows the Modrinth project (or the exact file, for unknown jars) across rescans.
 
-Server endpoints check, with your own Crafty token, that you can browse the server's files before reading or changing anything stored about it.
+Server endpoints check, with your own Crafty token, that you have Crafty's **Files** permission on the server before reading or changing anything stored about it (the Backup permission alone is not enough). The check asks Crafty to download a file that does not exist, `.crafty-complete-permission-check`, which Crafty answers with "not found" only when the permission is granted.
 - `GET /api/catalog/search` — search Modrinth. Query parameters:
   - `q` — free text
   - `type` — `mod` (default) or `modpack`

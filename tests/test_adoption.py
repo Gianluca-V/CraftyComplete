@@ -1,10 +1,12 @@
 import hashlib
+import html
 import json
 from urllib.parse import unquote
 
 import httpx
 import pytest
 
+from crafty_complete.crafty.client import PERMISSION_PROBE_PATH
 from tests.conftest import CRAFTY, USER_TOKEN, log_in, make_client
 
 SERVER = "abc-123"
@@ -51,10 +53,17 @@ class World:
         self.subdirs = SUBDIRS if subdirs is None else subdirs
         self.requests: list[httpx.Request] = []
         self.files_error: tuple[int, str] | None = None
+        # Crafty lets BACKUP-only users list files but only FILES users download them.
+        self.download_error: tuple[int, str] | None = None
         self.modrinth_down = False
+        self.on_version_files = None
 
     def crafty_calls(self, kind: str) -> list[httpx.Request]:
-        return [r for r in self.requests if r.url.host == "crafty.local" and kind in r.url.path]
+        return [r for r in self.requests if r.url.host == "crafty.local" and kind in r.url.path
+                and PERMISSION_PROBE_PATH not in r.url.path]
+
+    def permission_probes(self) -> list[httpx.Request]:
+        return [r for r in self.requests if PERMISSION_PROBE_PATH in r.url.path]
 
     def modrinth_calls(self, path: str) -> list[httpx.Request]:
         return [r for r in self.requests if r.url.host == "api.modrinth.com"
@@ -88,10 +97,17 @@ class World:
             return httpx.Response(200, json={"status": "ok", "data": data})
 
         if request.method == "GET" and request.url.path.endswith("/download"):
+            if self.download_error:
+                status, error = self.download_error
+                return httpx.Response(status, json={"status": "error", "error": error})
             raw = request.url.raw_path.decode().split("?")[0]
             encoded = raw[len(prefix) + 1:-len("/download")]
             assert "/" not in encoded, "file path must be URL-encoded as one segment"
-            return httpx.Response(200, content=self.files[unquote(encoded)])
+            # Crafty URL-decodes the path argument, then applies html.unescape to it.
+            path = html.unescape(unquote(encoded))
+            if path not in self.files:
+                return httpx.Response(404, json={"status": "error", "error": "File not found"})
+            return httpx.Response(200, content=self.files[path])
         raise AssertionError(f"unexpected Crafty call {request.method} {request.url.path}")
 
     def _modrinth(self, request: httpx.Request) -> httpx.Response:
@@ -99,6 +115,8 @@ class World:
             return httpx.Response(503)
         path = request.url.path
         if path == "/v2/version_files":
+            if self.on_version_files:
+                self.on_version_files()
             hashes = json.loads(request.content)["hashes"]
             return httpx.Response(200, json={h: VERSIONS[h] for h in hashes if h in VERSIONS})
         if path == "/v2/version_files/update":
@@ -276,6 +294,7 @@ def test_adoption_is_persisted_without_rescanning(world, db):
     assert stored.status_code == 200
     assert stored.json() == scanned
     assert world.crafty_calls("/download") == []
+    assert len(world.permission_probes()) == 1
     assert [r for r in world.requests if r.url.host == "api.modrinth.com"] == []
 
 
@@ -360,6 +379,66 @@ def test_missing_files_permission_is_forbidden_but_keeps_session(call, world, db
         "detail": "You do not have file access to this server in Crafty."
     }
     assert sessions_left == 1
+
+
+@pytest.mark.parametrize("call", ["scan", "get", "pin"])
+def test_backup_only_user_cannot_use_adoption(call, world, db):
+    """Crafty lets BACKUP-only users list files; adoption needs FILES (download) access."""
+    client = client_for(world, db)
+    scan(client)
+    world.download_error = (400, "NOT_AUTHORIZED")
+    if call == "scan":
+        response = scan(client)
+    elif call == "get":
+        response = client.get(f"/api/servers/{SERVER}/mods")
+    else:
+        response = client.patch(f"/api/servers/{SERVER}/mods/sodium.jar", json={"pinned": True})
+    stored = client.app.state.adoption_store.get(SERVER)
+    client.__exit__(None, None, None)
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "detail": "You do not have file access to this server in Crafty."
+    }
+    assert "fabric-api.jar" not in response.text
+    assert not any(mod.pinned for mod in stored.mods)
+
+
+def test_backup_only_user_cannot_adopt_an_empty_mods_folder(db):
+    world = World(files={}, subdirs={"": ["mods"]})
+    world.download_error = (400, "NOT_AUTHORIZED")
+    client = client_for(world, db)
+    response = scan(client)
+    stored = client.app.state.adoption_store.get(SERVER)
+    client.__exit__(None, None, None)
+
+    assert response.status_code == 403
+    assert stored.adopted is False
+
+
+def test_scan_handles_html_entities_in_file_names(db):
+    """Crafty html-unescapes download paths, so `&` must reach it as `&amp;`."""
+    world = World(files={"mods/rock&stone.jar": b"rock", "mods/a&amp;b.jar": b"amp"})
+    client = client_for(world, db)
+    response = scan(client)
+    client.__exit__(None, None, None)
+
+    assert response.status_code == 200
+    assert by_file(response.json())["rock&stone.jar"]["sha1"] == sha1(b"rock")
+    assert by_file(response.json())["a&amp;b.jar"]["sha1"] == sha1(b"amp")
+
+
+def test_pin_made_during_a_scan_is_kept(world, db):
+    client = client_for(world, db)
+    scan(client)
+    store = client.app.state.adoption_store
+    world.on_version_files = lambda: store.set_pinned(SERVER, "sodium.jar", True)
+    body = scan(client).json()
+    stored = store.get(SERVER).to_dict()
+    client.__exit__(None, None, None)
+
+    assert by_file(body)["sodium.jar"]["pinned"] is True
+    assert by_file(stored)["sodium.jar"]["pinned"] is True
 
 
 def test_forbidden_user_cannot_read_stored_adoption(world, db):
