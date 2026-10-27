@@ -1,0 +1,36 @@
+# craftyComplete — mod and modpack companion for Crafty Controller 4
+
+Objective: standalone, open-source Python + FastAPI service that adds Modrinth mod/modpack browsing, install, update and server creation on top of the Crafty Controller 4 API v2.
+Branch: `feat/base-modrinth-search` · Delivery: `ask-on-risk` · Test runner: `pytest` (`.venv/Scripts/python -m pytest`).
+
+## Specs
+
+- **S1 — Search view.** "Poder buscar mods y modpacks con una vista similar a CourseForge o Modrinth". Source: Modrinth first ("No tengo una api de CourseForge, empecemos con modrinth si es mas sencillo"); keep a provider abstraction so CurseForge can be added later.
+- **S2 — Add mods to servers.** "los mods deben poder agregarse a servidores". Required dependencies install automatically and client-only mods are rejected ("idealmente quiero que se instalen as dependencias requeridas automaticamente y que se validen los mods para que no pasen mods de solo cliente"). Mods that cannot be downloaded automatically: "saltearlos y avisar para subirlos a mano".
+- **S3 — Create servers from a modpack.** "se deben poder crear servidores directamente desde un modpack (incluidos los que requieren ejecutar un archivo bash para auto construirse)". Example: "Al descargar el server pack de prominence II se necesita ejecutar un archivo bash que construye los archivos de servidor completos." All loaders: "se necesitan soportar todos los loaders" (assumption: fabric, forge, neoforge, quilt; Crafty itself does not offer Quilt).
+- **S4 — Updates.** "actualizar facilmente con un boton mods especificos y modpacks completos dentro de un servidor". "manuales con boton y con chequeo automatico, que no se actualizen solos, unicamente deben tener un indicador de actualizacion disponible, tambien debe haber un boton de actualizar todos los mods." Modpack update: "que funcione como lo hace CourseForge" (proposed: replace pack mods, keep user-added mods, automatic Crafty backup first — to confirm).
+- **S5 — Adopt existing servers.** "quiero que pueda adoptar servidores": hash `mods/*.jar`, identify on Modrinth, states identified / unknown / pinned, optional link to a modpack.
+- **S6 — Permissions and integration.** "usemos los permisos de crafty". Separate app: "me sirve una app aparte pero estaria bien que se vea al menos un link desde crafty". Deployment: "crafty fue instalado en un proxmox usando los VE Scripts" (Linux LXC; the companion must reach the Crafty server directories).
+- **S7 — Base.** Configuration via environment, Crafty API v2 client authenticated with an API token, health endpoint reporting Crafty connectivity. No Crafty data is exposed until S6 authentication exists.
+
+## Tasks
+
+| ID | Specs | Route | Status | Commit |
+|----|-------|-------|--------|--------|
+| T1 | S7 | inline | in progress | — |
+| T2 | S1 | inline | pending | — |
+| T3 | S6 | — | pending (Crafty login + permission checks) | — |
+| T4 | S5 | — | pending | — |
+| T5 | S2, S4 | — | pending | — |
+| T6 | S3 | — | pending (.mrpack build, loader install incl. Quilt) | — |
+| T7 | S3 | — | pending (sandboxed build scripts) | — |
+| T8 | S6 | — | pending (link from Crafty) | — |
+
+Route evidence: T1/T2 are sequential, dependent units under ~400 lines each; no Writer trigger reason, so inline.
+
+## Log
+
+- **L1 (2026-10-27, user request):** "lee el codigo fuente de CraftyController en https://gitlab.com/crafty-controller/crafty-4. Se necesita agregar las siguientes funcionalidades: Poder buscar mods y modpacks con una vista similar a CourseForge o Modrinth, los mods deben poder agregarse a servidores y se deben poder crear servidores directamente desde un modpack (incluidos los que requieren ejecutar un archivo bash para auto construirse). Tambien se deben poder actualizar facilmente con un boton mods especificos y modpacks completos dentro de un servidor. Dame una propuesta sobre este desarrollo, seria mejor modificar el codigo de crafty o conectarse a su API? hazme todas las preguntas necesarias para clarificar el proyecto."
+- **L2 (2026-10-27):** Decision: companion service over Crafty API v2 (no plugin system in Crafty, active upstream, GPL-3). User answers recorded in S1–S6. Stack: "vamos con python y fastAPI".
+- **L3 (2026-10-27):** Evidence: Crafty jar manifest offers vanilla, fabric, forge-installer, neoforge-installer, paper, purpur, folia (no Quilt). Prominence II exists on Modrinth as `prominence-2-fabric`. Modrinth search facets accept `!=` (e.g. `server_side!=unsupported`).
+- **L4 (2026-10-27):** "Sí, arrancá con la implementación empezando por la base y la búsqueda en Modrinth." Starting T1 then T2.
