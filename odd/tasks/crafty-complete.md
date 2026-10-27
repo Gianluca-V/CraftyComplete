@@ -17,8 +17,8 @@ Branch: `feat/base-modrinth-search` · Delivery: `ask-on-risk` · Test runner: `
 
 | ID | Specs | Route | Status | Commit |
 |----|-------|-------|--------|--------|
-| T1 | S7 | inline | in progress | — |
-| T2 | S1 | inline | pending | — |
+| T1 | S7 | inline | done (5 tests GREEN) | `79c141d` |
+| T2 | S1 | inline | done (18 tests GREEN, checked live against Modrinth) | see T2 commit |
 | T3 | S6 | — | pending (Crafty login + permission checks) | — |
 | T4 | S5 | — | pending | — |
 | T5 | S2, S4 | — | pending | — |
@@ -34,3 +34,5 @@ Route evidence: T1/T2 are sequential, dependent units under ~400 lines each; no 
 - **L2 (2026-10-27):** Decision: companion service over Crafty API v2 (no plugin system in Crafty, active upstream, GPL-3). User answers recorded in S1–S6. Stack: "vamos con python y fastAPI".
 - **L3 (2026-10-27):** Evidence: Crafty jar manifest offers vanilla, fabric, forge-installer, neoforge-installer, paper, purpur, folia (no Quilt). Prominence II exists on Modrinth as `prominence-2-fabric`. Modrinth search facets accept `!=` (e.g. `server_side!=unsupported`).
 - **L4 (2026-10-27):** "Sí, arrancá con la implementación empezando por la base y la búsqueda en Modrinth." Starting T1 then T2.
+- **L5 (2026-10-27):** T1: RED (missing module) → GREEN 5/5; health endpoint only reports Crafty state and server count, no Crafty data exposed. T2: RED (collection error) → GREEN; live browser check found two defects, each pinned by a RED test first: modpack loaders live in `categories` but not `display_categories`; `versions[-1]` can be a snapshot (now latest release via regex). Dates/numbers forced to `en` to match English UI; mobile stats row wraps. Suite: 23 passed. T2 exceeds the ~400-line heuristic (UI + tests in one behavior); not split.
+- **Next:** T3 (Crafty login + permissions) must land before any endpoint exposes Crafty servers.

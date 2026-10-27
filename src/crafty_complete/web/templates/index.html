@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>craftyComplete — Browse</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">crafty<span>Complete</span></a>
+    <nav class="tabs" role="tablist" aria-label="Project type">
+      <button class="tab is-active" role="tab" aria-selected="true" data-type="mod">Mods</button>
+      <button class="tab" role="tab" aria-selected="false" data-type="modpack">Modpacks</button>
+    </nav>
+    <span class="version">v{{ version }}</span>
+  </header>
+
+  <main class="layout">
+    <aside class="filters" id="filters" aria-label="Filters">
+      <section class="filter-group">
+        <h2>Loader</h2>
+        <div id="loader-options" class="options"></div>
+      </section>
+      <section class="filter-group">
+        <h2><label for="game-version">Minecraft version</label></h2>
+        <select id="game-version">
+          <option value="">All versions</option>
+        </select>
+      </section>
+      <section class="filter-group">
+        <h2>Environment</h2>
+        <label class="check">
+          <input type="checkbox" id="server-compatible" checked>
+          Server-compatible only
+        </label>
+      </section>
+      <section class="filter-group">
+        <h2>Categories</h2>
+        <div id="category-options" class="options"></div>
+      </section>
+    </aside>
+
+    <section class="results-pane">
+      <div class="search-bar">
+        <input id="search-input" type="search" placeholder="Search mods…" autocomplete="off"
+               aria-label="Search">
+        <label class="sort">
+          Sort by
+          <select id="sort">
+            <option value="relevance">Relevance</option>
+            <option value="downloads">Downloads</option>
+            <option value="follows">Follows</option>
+            <option value="newest">Newest</option>
+            <option value="updated">Recently updated</option>
+          </select>
+        </label>
+        <button id="toggle-filters" class="ghost" aria-controls="filters" aria-expanded="false">
+          Filters
+        </button>
+      </div>
+      <p id="status" class="status" role="status" aria-live="polite"></p>
+      <ol id="results" class="results"></ol>
+      <nav class="pager" aria-label="Pagination">
+        <button id="prev" class="ghost" disabled>Previous</button>
+        <span id="page-info"></span>
+        <button id="next" class="ghost" disabled>Next</button>
+      </nav>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', path='app.js') }}"></script>
+</body>
+</html>

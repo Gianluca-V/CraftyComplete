@@ -26,9 +26,23 @@ Environment variables (or a `.env` file in the working directory):
 | `CRAFTY_COMPLETE_USER_AGENT` | `craftyComplete/<version>` | User-Agent sent to Modrinth |
 | `CRAFTY_COMPLETE_HTTP_TIMEOUT_SECONDS` | `10` | Timeout for outbound HTTP calls |
 
+Open http://localhost:8500 to browse Modrinth mods and modpacks.
+
 ## API
 
 - `GET /api/health` — service status and Crafty connectivity (`not_configured`, `connected`, `unauthorized`, `unreachable`, `error`).
+- `GET /api/catalog/search` — search Modrinth. Query parameters:
+  - `q` — free text
+  - `type` — `mod` (default) or `modpack`
+  - `loader` — repeatable: `fabric`, `forge`, `neoforge`, `quilt`
+  - `game_version` — e.g. `1.20.1`
+  - `category` — repeatable, e.g. `magic`
+  - `server_compatible` — `true` (default) hides client-only projects
+  - `sort` — `relevance`, `downloads`, `follows`, `newest`, `updated`
+  - `page` (≥ 1), `page_size` (1–100, default 20)
+
+  Returns `502` when Modrinth fails.
+- `GET /api/catalog/filters?type=mod|modpack` — loaders, release game versions and categories for the filter sidebar (cached for one hour).
 
 ## Tests
 
