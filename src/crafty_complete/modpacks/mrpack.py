@@ -15,6 +15,8 @@ ALLOWED_DOWNLOAD_HOSTS = {"cdn.modrinth.com", "github.com", "raw.githubuserconte
 LOADERS = {"fabric-loader": "fabric", "forge": "forge", "neoforge": "neoforge"}
 # Bound on what overrides may unpack to, so a hostile archive cannot fill the disk.
 MAX_OVERRIDES_BYTES = 4 * 1024**3
+MAX_SERVER_FILES_BYTES = 16 * 1024**3
+MAX_INDEX_BYTES = 64 * 1024**2
 
 
 class MrpackError(Exception):
@@ -69,6 +71,8 @@ def _server_file(entry: dict) -> PackFile:
 def read_index(pack_path: Path) -> PackIndex:
     try:
         with zipfile.ZipFile(pack_path) as archive:
+            if archive.getinfo(INDEX_FILE).file_size > MAX_INDEX_BYTES:
+                raise MrpackError(f"The modpack's index is larger than {MAX_INDEX_BYTES} bytes.")
             index = json.loads(archive.read(INDEX_FILE))
             entries = archive.namelist()
             unpacked_sizes = {info.filename: info.file_size for info in archive.infolist()}
@@ -97,6 +101,9 @@ def read_index(pack_path: Path) -> PackIndex:
         if pack_file.path in seen:  # two downloads into one file could mix their bytes
             raise MrpackError(f"The modpack lists {pack_file.path} more than once.")
         seen.add(pack_file.path)
+    if sum(f.size for f in server_files) > MAX_SERVER_FILES_BYTES:
+        raise MrpackError(
+            f"The modpack's server files add up to more than {MAX_SERVER_FILES_BYTES} bytes.")
 
     overrides: dict[str, str] = {}
     for folder in OVERRIDE_FOLDERS:

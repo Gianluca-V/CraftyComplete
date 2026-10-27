@@ -66,6 +66,14 @@ def _check_hashes(path: str, expected_sha1: str | None, expected_sha512: str | N
         raise JobFailure(f"{path} does not match the hash in the modpack.")
 
 
+RETRIES = 3
+
+
+def _sendable(relative: str) -> bool:
+    """Crafty takes the file name in an HTTP header, which must be printable ASCII."""
+    return relative.isascii() and relative.isprintable()
+
+
 def _is_mod_jar(relative: str) -> bool:
     path = PurePosixPath(relative)
     return path.parent == PurePosixPath(MODS_DIR) and path.suffix.lower() == ".jar"
@@ -133,11 +141,14 @@ class ModpackServerCreator:
                 raise CreationRefused(422, "Quilt modpacks are not supported yet.")
             raise CreationRefused(422, "The modpack does not use Fabric, Forge or NeoForge.")
         loader = loaders[0]
-        minecraft = (version.get("game_versions") or [None])[0]
 
         catalog = await self._crafty.jar_catalog(token)
         crafty_versions = (catalog.get(CRAFTY_CATEGORY, {}).get("types", {})
                            .get(CRAFTY_TYPES[loader], {}).get("versions", {}))
+        game_versions = version.get("game_versions") or [None]
+        # A version may list several Minecraft versions; use one Crafty can install.
+        minecraft = next((gv for gv in game_versions if gv in crafty_versions),
+                         game_versions[0])
         if minecraft not in crafty_versions:
             raise CreationRefused(422, f"Crafty cannot install {LOADER_NAMES[loader]} for "
                                        f"Minecraft {minecraft}.")
@@ -159,7 +170,7 @@ class ModpackServerCreator:
             message = f"{exc}."
         else:  # details (e.g. local paths) stay in the log, which JobRegistry writes
             message = "Unexpected error; see the craftyComplete log for details."
-        if job.server_id and not message.startswith("Crafty created"):
+        if job.server_id and not getattr(exc, "names_server", False):
             message += (f' The server "{job.server_name}" was created in Crafty but is not '
                         "complete; delete it there before trying again.")
         return message
@@ -271,6 +282,7 @@ class ModpackServerCreator:
         job.server_id = await self._crafty.create_server(token, {
             "name": request.name,
             "monitoring_type": "minecraft_java",
+            # Crafty pings the game port to show status; the server runs on Crafty's host.
             "minecraft_java_monitoring_data": {"host": "127.0.0.1", "port": request.port},
             "create_type": "minecraft_java",
             "minecraft_java_create_data": {
@@ -290,13 +302,14 @@ class ModpackServerCreator:
         job.begin(f"Installing {loader_name} in Crafty")
         deadline = time.monotonic() + self._settings.modpack_install_timeout_minutes * 60
         while True:
-            stats = await self._crafty.server_stats(token, job.server_id)
+            stats = await self._retry(lambda: self._crafty.server_stats(token, job.server_id))
             if not stats.get("importing"):
-                server = await self._crafty.get_server(token, job.server_id)
+                server = await self._retry(lambda: self._crafty.get_server(token, job.server_id))
                 if prepared.loader == "fabric":
                     # `importing` is also false during the ~3 s Crafty waits before its
                     # download starts, so only the jar on disk proves it finished.
-                    root = await self._crafty.list_dir(token, job.server_id, "")
+                    root = await self._retry(
+                        lambda: self._crafty.list_dir(token, job.server_id, ""))
                     if any(e.name == server.get("executable") and not e.is_dir for e in root):
                         return
                 # Crafty clears `importing` before its Forge/NeoForge installer runs; the
@@ -308,16 +321,16 @@ class ModpackServerCreator:
                 raise JobFailure(
                     f'Crafty created "{request.name}" but its {loader_name} {what} did not '
                     "finish in time. Check the server's terminal in Crafty, then delete the "
-                    "server there and try again.")
+                    "server there and try again.", names_server=True)
             await asyncio.sleep(self._settings.modpack_poll_seconds)
 
     async def _upload(self, job: Job, token: str, files: dict[str, Path]) -> None:
         """Phase 3a: send every file to the new server through Crafty."""
         sendable = {}
         for relative, source in files.items():
-            if relative.isascii() and relative.isprintable():
+            if _sendable(relative):
                 sendable[relative] = source
-            else:  # Crafty takes the file name in an HTTP header, which must be ASCII
+            else:
                 job.warnings.append(f"{relative} could not be sent to Crafty (non-ASCII name); "
                                     "upload it yourself.")
         # Crafty's upload cannot create folders, and its folder creation is not recursive:
@@ -327,7 +340,8 @@ class ModpackServerCreator:
         job.begin("Creating folders", total=len(folders))
         for folder in sorted(folders, key=lambda f: (len(f.parts), str(f))):
             parent = str(folder.parent) if folder.parent.parts else ""
-            await self._crafty.create_folder(token, job.server_id, parent, folder.name)
+            await self._retry(lambda: self._crafty.create_folder(
+                token, job.server_id, parent, folder.name))
             job.done += 1
 
         job.begin("Uploading files to the server", total=len(sendable))
@@ -336,9 +350,9 @@ class ModpackServerCreator:
         async def send(relative: str, source: Path) -> None:
             path = PurePosixPath(relative)
             async with limit:
-                await self._crafty.upload_path(
+                await self._retry(lambda: self._crafty.upload_path(
                     token, job.server_id, str(path.parent) if path.parent.parts else "",
-                    path.name, source, self._settings.upload_chunk_bytes)
+                    path.name, source, self._settings.upload_chunk_bytes))
             job.done += 1
 
         await self._gather(send(r, s) for r, s in sendable.items())
@@ -349,7 +363,7 @@ class ModpackServerCreator:
         hashes = {
             PurePosixPath(relative).name: await asyncio.to_thread(_sha1, source)
             for relative, source in files.items()
-            if _is_mod_jar(relative) and relative.isascii()
+            if _is_mod_jar(relative) and _sendable(relative)
         }
         async with self._locks(job.server_id):
             await self._adoption.record(
@@ -358,6 +372,19 @@ class ModpackServerCreator:
                          "title": prepared.project["title"],
                          "version_id": prepared.version["id"],
                          "version_number": prepared.version.get("version_number")})
+
+    async def _retry(self, operation):
+        """Run a Crafty call, retrying network errors and 5xx-style failures.
+
+        Never used for creating the server itself, which must not happen twice.
+        """
+        for attempt in range(1, RETRIES + 1):
+            try:
+                return await operation()
+            except CraftyError as exc:
+                if exc.state not in ("unreachable", "error") or attempt == RETRIES:
+                    raise
+            await asyncio.sleep(self._settings.crafty_retry_seconds * attempt)
 
     @staticmethod
     async def _gather(coroutines) -> None:

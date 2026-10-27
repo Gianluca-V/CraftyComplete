@@ -27,7 +27,7 @@ To **create a server from a modpack**, open the Modpacks tab, press **Create ser
 2. asks Crafty to create the server and install the loader. Crafty installs the newest loader build it offers for that Minecraft version; you get a warning when that differs from the version the pack names;
 3. creates the folders the pack needs and uploads its mods and `overrides/` (then `server-overrides/`) to the server and records it as adopted, linked to the modpack version.
 
-Quilt modpacks are not supported yet. If a step fails after Crafty created the server, the error names it so you can delete it in Crafty.
+Quilt modpacks are not supported yet. Each user can build one modpack server at a time. The build keeps using your Crafty session until it ends, even if you log out of craftyComplete; if craftyComplete stops mid-build, the job is marked as failed. If a step fails after Crafty created the server, the error names it so you can delete it in Crafty.
 
 ## Authentication and permissions
 
@@ -56,6 +56,7 @@ Environment variables (or a `.env` file in the working directory):
 | `CRAFTY_COMPLETE_MODPACK_INSTALL_TIMEOUT_MINUTES` | `20` | How long to wait for Crafty to install the loader |
 | `CRAFTY_COMPLETE_MODPACK_POLL_SECONDS` | `5` | How often to ask Crafty whether the loader is installed |
 | `CRAFTY_COMPLETE_UPLOAD_CHUNK_BYTES` | `10485760` | Files above this size go to Crafty in chunks (Crafty rejects single requests over 100 MB) |
+| `CRAFTY_COMPLETE_CRAFTY_RETRY_SECONDS` | `2` | Base delay before retrying a Crafty request that failed with a network error or a server error while building a modpack server (up to 3 attempts) |
 | `CRAFTY_COMPLETE_UPDATE_CHECK_HOURS` | `6` | How often to look for mod updates in the background; `0` turns it off. It only marks updates as available |
 | `CRAFTY_COMPLETE_SESSION_IDLE_MINUTES` | `60` | Log out after this much inactivity |
 | `CRAFTY_COMPLETE_SESSION_MAX_HOURS` | `12` | Maximum session lifetime |

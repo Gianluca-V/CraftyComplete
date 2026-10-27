@@ -138,6 +138,8 @@ class CreationFakes(FakeServices):
         # Folders that exist in the new server (Crafty's upload cannot create them).
         self.folders = {""}
         self.created_folders: list[str] = []
+        # Fail the first N requests to these paths with 503, then behave.
+        self.flaky: dict[str, int] = {}
         self.installer_polls = 2  # execution_command keeps --installServer this long
         self.install_never_finishes = False
         self.can_create = True
@@ -181,6 +183,10 @@ class CreationFakes(FakeServices):
 
     def _crafty(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
+        for suffix, remaining in list(self.flaky.items()):
+            if path.endswith(suffix) and remaining:
+                self.flaky[suffix] = remaining - 1
+                return httpx.Response(503, text="Service Unavailable")
         if request.headers.get("Authorization") != f"Bearer {USER_TOKEN}":
             return httpx.Response(403, json={"status": "error", "error": "ACCESS_DENIED"})
         if path == "/api/v2/users/@me/permissions":
@@ -480,6 +486,96 @@ def test_api_prefers_the_newest_release(tmp_path, db):
 
     assert job["status"] == "succeeded", job
     assert job["title"] == "A Pack 1.0.0"
+
+
+def test_transient_crafty_errors_are_retried(tmp_path, db):
+    fakes = CreationFakes()
+    fakes.flaky = {"/stats": 2, "/files/upload": 2, "/files/create": 1}
+    client = creation_client(fakes, db, tmp_path, crafty_retry_seconds=0)
+    job = wait_for(client, start(client).json()["job_id"])
+    client.__exit__(None, None, None)
+
+    assert job["status"] == "succeeded", job
+    assert "mods/mod-a.jar" in fakes.server_files
+
+
+def test_failure_after_creation_names_the_server(tmp_path, db):
+    fakes = CreationFakes()
+    fakes.flaky = {"/files/upload": 100}
+    client = creation_client(fakes, db, tmp_path, crafty_retry_seconds=0)
+    job = wait_for(client, start(client).json()["job_id"])
+    client.__exit__(None, None, None)
+
+    assert job["status"] == "failed"
+    assert job["error"] == (
+        'Crafty request failed: HTTP 503. The server "My Pack" was created in Crafty but is '
+        "not complete; delete it there before trying again.")
+
+
+def test_one_running_job_per_user(tmp_path, db):
+    fakes = CreationFakes()
+    fakes.install_never_finishes = True
+    client = creation_client(fakes, db, tmp_path, modpack_poll_seconds=0.05)
+    first = start(client)
+    second = start(client, name="Another")
+    client.__exit__(None, None, None)
+
+    assert first.status_code == 202
+    assert second.status_code == 409
+    assert second.json() == {"detail": "You already have a modpack server being built; "
+                                       "wait for it to finish."}
+
+
+def test_oversized_server_file_total_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setattr("crafty_complete.modpacks.mrpack.MAX_SERVER_FILES_BYTES", 5)
+    with pytest.raises(MrpackError) as error:
+        read_index(write_pack(tmp_path, build_mrpack()))
+
+    assert str(error.value) == "The modpack's server files add up to more than 5 bytes."
+
+
+def test_oversized_index_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setattr("crafty_complete.modpacks.mrpack.MAX_INDEX_BYTES", 10)
+    with pytest.raises(MrpackError) as error:
+        read_index(write_pack(tmp_path, build_mrpack()))
+
+    assert str(error.value) == "The modpack's index is larger than 10 bytes."
+
+
+def test_picks_a_minecraft_version_crafty_supports(tmp_path, db):
+    fakes = CreationFakes()
+    original = fakes._modrinth
+
+    def two_versions(request):
+        response = original(request)
+        if request.url.path == f"/v2/version/{PACK_VERSION_ID}":
+            body = response.json()
+            body["game_versions"] = ["1.20", "1.20.1"]
+            return httpx.Response(200, json=body)
+        return response
+
+    fakes._modrinth = two_versions
+    client = creation_client(fakes, db, tmp_path)
+    job = wait_for(client, start(client).json()["job_id"])
+    client.__exit__(None, None, None)
+
+    assert job["status"] == "succeeded", job
+    assert fakes.created[0]["minecraft_java_create_data"]["download_jar_create_data"][
+        "version"] == "1.20.1"
+
+
+def test_job_interrupted_by_shutdown_is_marked_failed(tmp_path, db):
+    fakes = CreationFakes()
+    fakes.install_never_finishes = True
+    client = creation_client(fakes, db, tmp_path, modpack_poll_seconds=0.05)
+    job_id = start(client).json()["job_id"]
+    time.sleep(0.3)
+    jobs = client.app.state.jobs
+    client.__exit__(None, None, None)
+    job = jobs.get(job_id, "1")
+
+    assert job.status == "failed"
+    assert job.error.startswith("craftyComplete stopped while this job was running.")
 
 
 def test_client_only_mods_are_skipped_even_without_env(tmp_path, db):

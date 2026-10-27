@@ -12,7 +12,15 @@ MAX_JOBS = 50
 
 
 class JobFailure(Exception):
-    """A failure whose message is already written for the user."""
+    """A failure whose message is already written for the user.
+
+    `names_server` is true when the message already tells the user about the server that
+    was created in Crafty, so nothing needs to be appended.
+    """
+
+    def __init__(self, message: str, names_server: bool = False):
+        super().__init__(message)
+        self.names_server = names_server
 
 
 @dataclass
@@ -58,10 +66,19 @@ class JobRegistry:
         async def run() -> None:
             try:
                 await work(job)
+            except asyncio.CancelledError:
+                job.status = "failed"
+                job.error = describe_error(
+                    JobFailure("craftyComplete stopped while this job was running."))
+                logger.warning("Job %s interrupted: %s", job.id, job.error)
+                raise
             except Exception as exc:  # every failure ends up on the job, never lost
                 if not isinstance(exc, JobFailure):
                     logger.exception("Job %s failed", job.id)
                 job.status, job.error = "failed", describe_error(exc)
+                if job.server_id:  # the in-memory job is the only other record of it
+                    logger.warning("Job %s left server %s incomplete: %s",
+                                   job.id, job.server_id, job.error)
             else:
                 job.status, job.step = "succeeded", "Done"
 
@@ -69,6 +86,10 @@ class JobRegistry:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return job
+
+    def running(self, owner_id: str) -> int:
+        return sum(job.status == "running" and job.owner_id == owner_id
+                   for job in self._jobs.values())
 
     def get(self, job_id: str, owner_id: str) -> Job | None:
         job = self._jobs.get(job_id)

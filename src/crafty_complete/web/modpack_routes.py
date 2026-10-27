@@ -71,6 +71,9 @@ async def create_server(body: CreateServerRequest, request: Request,
         raise HTTPException(status_code=422,
                             detail="Minimum memory cannot exceed maximum memory.")
     creator = _creator(request)
+    if request.app.state.jobs.running(session.user_id):
+        raise HTTPException(status_code=409, detail="You already have a modpack server being "
+                                                    "built; wait for it to finish.")
     create = CreateRequest(project_id=body.project_id, version_id=body.version_id,
                            name=body.name, port=body.port, mem_min=body.mem_min,
                            mem_max=body.mem_max)
@@ -83,13 +86,15 @@ async def create_server(body: CreateServerRequest, request: Request,
     except CatalogError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+    # The job keeps using this Crafty token until it ends, even if the user logs out.
     token = session.crafty_token
-    job = request.app.state.jobs.start(
+    started = request.app.state.jobs.start(
         session.user_id, f"{prepared.project['title']} {prepared.version.get('version_number')}",
-        lambda job: creator.run(job, token, prepared, create),
-        lambda exc: creator.describe_error(job, exc),
+        lambda running_job: creator.run(running_job, token, prepared, create),
+        # Called only after start() returned, so `started` is assigned by then.
+        lambda exc: creator.describe_error(started, exc),
     )
-    return {"job_id": job.id}
+    return {"job_id": started.id}
 
 
 @router.get("/jobs/{job_id}")

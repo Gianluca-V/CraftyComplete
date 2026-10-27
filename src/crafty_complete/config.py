@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     modpack_poll_seconds: float = 5
     # Files above this size are uploaded to Crafty in chunks (its request limit is 100 MB).
     upload_chunk_bytes: int = 10 * 1024 * 1024
+    # Base delay between retries of transient Crafty failures (attempt n waits n x this).
+    crafty_retry_seconds: float = 2
 
     session_idle_minutes: float = 60
     session_max_hours: float = 12
