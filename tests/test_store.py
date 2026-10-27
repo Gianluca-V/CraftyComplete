@@ -65,8 +65,11 @@ def test_version_2_database_gains_the_modpack_link(tmp_path):
 
     store = AdoptionStore(str(path))
     server = store.get("abc")
+    store.set_modpack_files("abc", {"mods/a.jar": "deadbeef"})
+    pack_files = store.get_modpack_files("abc")
     store.close()
 
+    assert pack_files == {"mods/a.jar": "deadbeef"}
     assert server.updates_checked_at == "t1"
     assert server.modpack_project_id is None
     assert server.to_dict()["modpack"] is None

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from crafty_complete.mods.models import AdoptedServer, InstalledMod
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS adopted_servers (
@@ -37,6 +37,14 @@ CREATE TABLE IF NOT EXISTS server_mods (
     pinned                INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (server_id, file_name)
 );
+-- The files the linked modpack version put on the server (path relative to the server
+-- folder -> SHA-1), so an update can tell pack files from the user's own.
+CREATE TABLE IF NOT EXISTS modpack_files (
+    server_id TEXT NOT NULL REFERENCES adopted_servers(server_id) ON DELETE CASCADE,
+    path      TEXT NOT NULL,
+    sha1      TEXT,
+    PRIMARY KEY (server_id, path)
+);
 """
 
 # Applied in order to databases created by older versions (index = version it upgrades from).
@@ -44,6 +52,7 @@ MIGRATIONS = {
     1: ["ALTER TABLE adopted_servers ADD COLUMN updates_checked_at TEXT"],
     2: [f"ALTER TABLE adopted_servers ADD COLUMN {column} TEXT" for column in (
         "modpack_project_id", "modpack_title", "modpack_version_id", "modpack_version_number")],
+    3: [],  # adds the modpack_files table, created by SCHEMA
 }
 
 SERVER_COLUMNS = ["server_id", "loader", "game_version", "scanned_at", "updates_checked_at",
@@ -147,6 +156,31 @@ class AdoptionStore:
             self._db.execute(
                 "UPDATE adopted_servers SET updates_checked_at = ? WHERE server_id = ?",
                 (checked_at, server_id),
+            )
+
+    def set_modpack_link(self, server_id: str, link: dict[str, str | None]) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "UPDATE adopted_servers SET modpack_project_id = ?, modpack_title = ?, "
+                "modpack_version_id = ?, modpack_version_number = ? WHERE server_id = ?",
+                (link["project_id"], link["title"], link["version_id"],
+                 link["version_number"], server_id),
+            )
+
+    def get_modpack_files(self, server_id: str) -> dict[str, str | None]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT path, sha1 FROM modpack_files WHERE server_id = ?", (server_id,)
+            ).fetchall()
+        return {row["path"]: row["sha1"] for row in rows}
+
+    def set_modpack_files(self, server_id: str, files: dict[str, str | None]) -> None:
+        """Replace the remembered pack files of a server."""
+        with self._lock, self._db:
+            self._db.execute("DELETE FROM modpack_files WHERE server_id = ?", (server_id,))
+            self._db.executemany(
+                "INSERT INTO modpack_files (server_id, path, sha1) VALUES (?, ?, ?)",
+                [(server_id, path, sha1) for path, sha1 in files.items()],
             )
 
     def set_pinned(self, server_id: str, file_name: str, pinned: bool) -> InstalledMod | None:

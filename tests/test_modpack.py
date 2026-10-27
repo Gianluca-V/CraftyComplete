@@ -522,7 +522,7 @@ def test_one_running_job_per_user(tmp_path, db):
 
     assert first.status_code == 202
     assert second.status_code == 409
-    assert second.json() == {"detail": "You already have a modpack server being built; "
+    assert second.json() == {"detail": "You already have a modpack job running; "
                                        "wait for it to finish."}
 
 

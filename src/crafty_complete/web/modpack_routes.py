@@ -12,11 +12,15 @@ from crafty_complete.modpacks.creator import (
     CreationRefused,
     ModpackServerCreator,
 )
+from crafty_complete.modpacks.linker import ModpackLinker, version_summary
+from crafty_complete.modpacks.packs import describe_failure
 from crafty_complete.web.deps import crafty_failure, require_crafty, require_session
+from crafty_complete.web.server_routes import FILES_FORBIDDEN
 
 router = APIRouter(prefix="/api")
 
 ProjectRef = Annotated[str, Path(pattern=r"^[A-Za-z0-9_.-]{1,64}$")]
+JOB_RUNNING = "You already have a modpack job running; wait for it to finish."
 EULA_REQUIRED = ("You must accept the Minecraft EULA (https://aka.ms/MinecraftEULA) "
                  "to create a server.")
 
@@ -72,8 +76,7 @@ async def create_server(body: CreateServerRequest, request: Request,
                             detail="Minimum memory cannot exceed maximum memory.")
     creator = _creator(request)
     if request.app.state.jobs.running(session.user_id):
-        raise HTTPException(status_code=409, detail="You already have a modpack server being "
-                                                    "built; wait for it to finish.")
+        raise HTTPException(status_code=409, detail=JOB_RUNNING)
     create = CreateRequest(project_id=body.project_id, version_id=body.version_id,
                            name=body.name, port=body.port, mem_min=body.mem_min,
                            mem_max=body.mem_max)
@@ -93,6 +96,74 @@ async def create_server(body: CreateServerRequest, request: Request,
         lambda running_job: creator.run(running_job, token, prepared, create),
         # Called only after start() returned, so `started` is assigned by then.
         lambda exc: creator.describe_error(started, exc),
+    )
+    return {"job_id": started.id}
+
+
+ServerId = Annotated[str, Path(pattern=r"^[a-z0-9-]{1,64}$")]
+
+
+class LinkRequest(BaseModel):
+    project_id: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,64}$")
+    version_id: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,64}$")
+
+
+def _linker(request: Request) -> ModpackLinker:
+    require_crafty(request)
+    return request.app.state.modpack_linker
+
+
+async def _guarded(request: Request, session: Session, operation):
+    """Run a linker/updater step, translating refusals and Crafty/Modrinth failures."""
+    try:
+        return await operation()
+    except CreationRefused as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except CraftyError as exc:
+        if exc.state == "forbidden":
+            raise HTTPException(status_code=403, detail=FILES_FORBIDDEN) from exc
+        raise crafty_failure(request, session, exc) from exc
+    except CatalogError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/servers/{server_id}/modpack")
+async def modpack_status(server_id: ServerId, request: Request,
+                         session: Session = Depends(require_session)) -> dict:
+    """The linked modpack version and the newest one for the same Minecraft and loader."""
+    linker = _linker(request)
+
+    async def status() -> dict:
+        await request.app.state.adoption.ensure_file_access(session.crafty_token, server_id)
+        server = request.app.state.adoption_store.get(server_id)
+        if not server.modpack_project_id:
+            return {"linked": None, "latest": None, "update_available": False, "versions": []}
+        versions = await linker.compatible_versions(server.modpack_project_id, server)
+        latest = next((v for v in versions if v.get("version_type") == "release"),
+                      versions[0] if versions else None)
+        return {
+            "linked": server.to_dict()["modpack"],
+            "latest": version_summary(latest) if latest else None,
+            "update_available": bool(latest and latest["id"] != server.modpack_version_id),
+            "versions": [version_summary(v) for v in versions],
+        }
+
+    return await _guarded(request, session, status)
+
+
+@router.post("/servers/{server_id}/modpack/link", status_code=202)
+async def link_modpack(server_id: ServerId, body: LinkRequest, request: Request,
+                       session: Session = Depends(require_session)) -> dict:
+    """Record which modpack version an adopted server runs; poll /api/jobs/{job_id}."""
+    linker = _linker(request)
+    target = await _guarded(request, session, lambda: linker.prepare(
+        session.crafty_token, server_id, body.project_id, body.version_id))
+    if request.app.state.jobs.running(session.user_id):
+        raise HTTPException(status_code=409, detail=JOB_RUNNING)
+    started = request.app.state.jobs.start(
+        session.user_id, f"Link {target.project['title']} {target.version.get('version_number')}",
+        lambda running_job: linker.link(running_job, server_id, target),
+        describe_failure,
     )
     return {"job_id": started.id}
 

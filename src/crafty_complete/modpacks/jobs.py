@@ -36,6 +36,8 @@ class Job:
     error: str | None = None
     server_id: str | None = None
     server_name: str | None = None
+    # What the job found or did, for the client to show once it has succeeded.
+    result: dict | None = None
 
     def begin(self, step: str, total: int = 0) -> None:
         self.step, self.done, self.total = step, 0, total
@@ -46,6 +48,7 @@ class Job:
             "progress": {"done": self.done, "total": self.total},
             "warnings": self.warnings, "error": self.error,
             "server_id": self.server_id, "server_name": self.server_name,
+            "result": self.result,
         }
 
 

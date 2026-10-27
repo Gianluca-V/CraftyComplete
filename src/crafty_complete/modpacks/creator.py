@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import shutil
 import tempfile
 import time
@@ -12,10 +11,18 @@ from crafty_complete.catalog.models import CatalogError, CatalogNotFound
 from crafty_complete.catalog.modrinth import MODRINTH_CDN, ModrinthProvider
 from crafty_complete.config import Settings
 from crafty_complete.crafty.client import CraftyClient, CraftyError
-from crafty_complete.mods.adoption import MODS_DIR, AdoptionService
+from crafty_complete.mods.adoption import AdoptionService
 from crafty_complete.mods.locks import ServerLocks
+from crafty_complete.mods.store import AdoptionStore
 from crafty_complete.modpacks.jobs import Job, JobFailure
-from crafty_complete.modpacks.mrpack import MrpackError, read_index
+from crafty_complete.modpacks.packs import (
+    PackReader,
+    check_hashes,
+    describe_failure,
+    file_sha1,
+    is_mod_jar,
+    sendable,
+)
 
 # Crafty's catalog category and server types for each loader it can install.
 CRAFTY_CATEGORY = "mc_java_servers"
@@ -23,7 +30,6 @@ CRAFTY_TYPES = {"fabric": "fabric", "forge": "forge-installer", "neoforge": "neo
 LOADER_NAMES = {"fabric": "Fabric", "forge": "Forge", "neoforge": "NeoForge"}
 # The dependency key each loader uses in modrinth.index.json, for messages.
 PACK_LOADER_KEYS = {"fabric": "fabric-loader", "forge": "forge", "neoforge": "neoforge"}
-MAX_PACK_BYTES = 4 * 1024**3
 MAX_FILE_BYTES = 1024**3
 TRANSFER_CONCURRENCY = 4
 
@@ -57,34 +63,7 @@ class Prepared:
     pack_file: dict[str, Any]
 
 
-def _check_hashes(path: str, expected_sha1: str | None, expected_sha512: str | None,
-                  actual: tuple[str, str]) -> None:
-    if not (expected_sha1 or expected_sha512) or (
-        (expected_sha1 and expected_sha1 != actual[0])
-        or (expected_sha512 and expected_sha512 != actual[1])
-    ):
-        raise JobFailure(f"{path} does not match the hash in the modpack.")
-
-
 RETRIES = 3
-
-
-def _sendable(relative: str) -> bool:
-    """Crafty takes the file name in an HTTP header, which must be printable ASCII."""
-    return relative.isascii() and relative.isprintable()
-
-
-def _is_mod_jar(relative: str) -> bool:
-    path = PurePosixPath(relative)
-    return path.parent == PurePosixPath(MODS_DIR) and path.suffix.lower() == ".jar"
-
-
-def _sha1(path: Path) -> str:
-    digest = hashlib.sha1()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 class ModpackServerCreator:
@@ -96,12 +75,15 @@ class ModpackServerCreator:
     """
 
     def __init__(self, crafty: CraftyClient, modrinth: ModrinthProvider,
-                 adoption: AdoptionService, locks: ServerLocks, settings: Settings):
+                 adoption: AdoptionService, store: AdoptionStore, locks: ServerLocks,
+                 settings: Settings):
         self._crafty = crafty
         self._modrinth = modrinth
         self._adoption = adoption
+        self._store = store
         self._locks = locks
         self._settings = settings
+        self._packs = PackReader(modrinth)
 
     # --- before the job ------------------------------------------------------------
 
@@ -161,15 +143,7 @@ class ModpackServerCreator:
                         crafty_versions[minecraft].get("loader_version"), pack_file)
 
     def describe_error(self, job: Job, exc: Exception) -> str:
-        if isinstance(exc, (JobFailure, MrpackError)):
-            message = str(exc)
-        elif isinstance(exc, CraftyError):
-            message = ("Your Crafty session expired; log in again." if exc.state == "unauthorized"
-                       else f"Crafty request failed: {exc.message}.")
-        elif isinstance(exc, CatalogError):
-            message = f"{exc}."
-        else:  # details (e.g. local paths) stay in the log, which JobRegistry writes
-            message = "Unexpected error; see the craftyComplete log for details."
+        message = describe_failure(exc)
         if job.server_id and not getattr(exc, "names_server", False):
             message += (f' The server "{job.server_name}" was created in Crafty but is not '
                         "complete; delete it there before trying again.")
@@ -182,24 +156,20 @@ class ModpackServerCreator:
         base.mkdir(parents=True, exist_ok=True)
         workdir = Path(tempfile.mkdtemp(prefix="modpack-", dir=base))
         try:
-            files = await self._download(job, prepared, workdir)
+            files, pack_hashes = await self._download(job, prepared, workdir)
             await self._create_in_crafty(job, token, prepared, request)
             await self._upload(job, token, files)
-            await self._record(job, prepared, files)
+            await self._record(job, prepared, files, pack_hashes)
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
 
-    async def _download(self, job: Job, prepared: Prepared, workdir: Path) -> dict[str, Path]:
-        """Phase 1: the .mrpack and every server file, verified. Returns server path -> file."""
-        job.begin("Downloading the modpack")
-        pack_path = workdir / "pack.mrpack"
-        actual = await self._modrinth.download_to_file(
-            prepared.pack_file["url"], pack_path, MAX_PACK_BYTES)
-        hashes = prepared.pack_file.get("hashes") or {}
-        _check_hashes(prepared.pack_file.get("filename", "The modpack"),
-                      hashes.get("sha1"), hashes.get("sha512"), actual)
+    async def _download(self, job: Job, prepared: Prepared,
+                        workdir: Path) -> tuple[dict[str, Path], dict[str, str | None]]:
+        """Phase 1: the .mrpack and every server file it keeps, verified.
 
-        index = await asyncio.to_thread(read_index, pack_path)
+        Returns server path -> local file, and server path -> SHA-1 of the pack's files.
+        """
+        pack_path, index = await self._packs.fetch(job, prepared.pack_file, workdir)
         if (index.loader, index.minecraft) != (prepared.loader, prepared.minecraft):
             raise JobFailure(
                 f"The modpack file is for {LOADER_NAMES[index.loader]} {index.minecraft}, "
@@ -211,8 +181,13 @@ class ModpackServerCreator:
                 f"Crafty installs {prepared.crafty_loader_version} for Minecraft "
                 f"{index.minecraft}.")
 
+        # Decide what to keep before downloading, so client-only mods are never fetched.
+        kept = await self._packs.drop_client_only(
+            job, await self._packs.file_hashes(index, pack_path))
+        to_download = [f for f in index.server_files
+                       if f.path in kept and f.path not in index.overrides]
         files: dict[str, Path] = {}
-        job.begin("Downloading mods", total=len(index.server_files))
+        job.begin("Downloading mods", total=len(to_download))
         limit = asyncio.Semaphore(TRANSFER_CONCURRENCY)
 
         async def fetch(pack_file) -> None:
@@ -227,51 +202,28 @@ class ModpackServerCreator:
                         last_error = exc
                 else:
                     raise JobFailure(f"Could not download {pack_file.path}: {last_error}")
-            _check_hashes(pack_file.path, pack_file.sha1, pack_file.sha512, actual)
+            check_hashes(pack_file.path, pack_file.sha1, pack_file.sha512, actual)
             files[pack_file.path] = target
             job.done += 1
 
-        await self._gather(fetch(f) for f in index.server_files)
+        await self._gather(fetch(f) for f in to_download)
 
-        job.begin("Unpacking overrides", total=len(index.overrides))
+        overrides = {r: e for r, e in index.overrides.items() if r in kept}
+        job.begin("Unpacking overrides", total=len(overrides))
 
         def extract() -> None:
             with zipfile.ZipFile(pack_path) as archive:
-                for relative, entry in index.overrides.items():
+                for relative, entry in overrides.items():
                     target = workdir / "overrides" / relative
                     target.parent.mkdir(parents=True, exist_ok=True)
                     with archive.open(entry) as source, target.open("wb") as handle:
                         shutil.copyfileobj(source, handle)
-                    files[relative] = target  # overrides replace downloaded files
+                    files[relative] = target
                     job.done += 1
 
         await asyncio.to_thread(extract)
         pack_path.unlink(missing_ok=True)
-        await self._drop_client_only(job, files)
-        return files
-
-    async def _drop_client_only(self, job: Job, files: dict[str, Path]) -> None:
-        """Remove jars whose Modrinth project cannot run on a server.
-
-        The index's `env` is optional and many packs omit it, which the spec reads as
-        "needed everywhere"; Modrinth's project data is the reliable source.
-        """
-        job.begin("Checking which mods run on a server")
-        jars = {relative: await asyncio.to_thread(_sha1, source)
-                for relative, source in files.items() if _is_mod_jar(relative)}
-        versions = await self._modrinth.versions_by_sha1(sorted(set(jars.values())))
-        projects = await self._modrinth.projects(
-            sorted({v["project_id"] for v in versions.values()}))
-        skipped = []
-        for relative, sha1 in sorted(jars.items()):
-            project = projects.get((versions.get(sha1) or {}).get("project_id"), {})
-            if project.get("server_side") == "unsupported":
-                del files[relative]
-                skipped.append(f"{project.get('title') or relative} ({relative})")
-        if skipped:
-            noun = "mod" if len(skipped) == 1 else "mods"
-            job.warnings.append(f"Skipped {len(skipped)} client-only {noun} (not needed on a "
-                                f"server): {', '.join(skipped)}.")
+        return files, kept
 
     async def _create_in_crafty(self, job: Job, token: str, prepared: Prepared,
                                 request: CreateRequest) -> None:
@@ -326,16 +278,16 @@ class ModpackServerCreator:
 
     async def _upload(self, job: Job, token: str, files: dict[str, Path]) -> None:
         """Phase 3a: send every file to the new server through Crafty."""
-        sendable = {}
+        to_send = {}
         for relative, source in files.items():
-            if _sendable(relative):
-                sendable[relative] = source
+            if sendable(relative):
+                to_send[relative] = source
             else:
                 job.warnings.append(f"{relative} could not be sent to Crafty (non-ASCII name); "
                                     "upload it yourself.")
         # Crafty's upload cannot create folders, and its folder creation is not recursive:
         # create every needed folder, parents first.
-        folders = {parent for relative in sendable
+        folders = {parent for relative in to_send
                    for parent in PurePosixPath(relative).parents if parent.parts}
         job.begin("Creating folders", total=len(folders))
         for folder in sorted(folders, key=lambda f: (len(f.parts), str(f))):
@@ -344,7 +296,7 @@ class ModpackServerCreator:
                 token, job.server_id, parent, folder.name))
             job.done += 1
 
-        job.begin("Uploading files to the server", total=len(sendable))
+        job.begin("Uploading files to the server", total=len(to_send))
         limit = asyncio.Semaphore(TRANSFER_CONCURRENCY)
 
         async def send(relative: str, source: Path) -> None:
@@ -355,15 +307,16 @@ class ModpackServerCreator:
                     path.name, source, self._settings.upload_chunk_bytes))
             job.done += 1
 
-        await self._gather(send(r, s) for r, s in sendable.items())
+        await self._gather(send(r, s) for r, s in to_send.items())
 
-    async def _record(self, job: Job, prepared: Prepared, files: dict[str, Path]) -> None:
+    async def _record(self, job: Job, prepared: Prepared, files: dict[str, Path],
+                      pack_hashes: dict[str, str | None]) -> None:
         """Phase 3b: remember the server as adopted, linked to its modpack version."""
         job.begin("Identifying mods")
         hashes = {
-            PurePosixPath(relative).name: await asyncio.to_thread(_sha1, source)
+            PurePosixPath(relative).name: await asyncio.to_thread(file_sha1, source)
             for relative, source in files.items()
-            if _is_mod_jar(relative) and _sendable(relative)
+            if is_mod_jar(relative) and sendable(relative)
         }
         async with self._locks(job.server_id):
             await self._adoption.record(
@@ -372,6 +325,8 @@ class ModpackServerCreator:
                          "title": prepared.project["title"],
                          "version_id": prepared.version["id"],
                          "version_number": prepared.version.get("version_number")})
+            self._store.set_modpack_files(
+                job.server_id, {p: h for p, h in pack_hashes.items() if sendable(p)})
 
     async def _retry(self, operation):
         """Run a Crafty call, retrying network errors and 5xx-style failures.
