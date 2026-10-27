@@ -124,7 +124,8 @@ class ModpackServerCreator:
             if not versions:
                 raise CreationRefused(422, f"{project['title']} has no Fabric, Forge or "
                                            "NeoForge version.")
-            version = versions[0]
+            version = next((v for v in versions if v.get("version_type") == "release"),
+                           versions[0])
 
         loaders = [l for l in version.get("loaders") or [] if l in CRAFTY_TYPES]
         if not loaders:
@@ -156,8 +157,8 @@ class ModpackServerCreator:
                        else f"Crafty request failed: {exc.message}.")
         elif isinstance(exc, CatalogError):
             message = f"{exc}."
-        else:
-            message = f"Unexpected error: {exc}"
+        else:  # details (e.g. local paths) stay in the log, which JobRegistry writes
+            message = "Unexpected error; see the craftyComplete log for details."
         if job.server_id and not message.startswith("Crafty created"):
             message += (f' The server "{job.server_name}" was created in Crafty but is not '
                         "complete; delete it there before trying again.")
@@ -291,12 +292,16 @@ class ModpackServerCreator:
         while True:
             stats = await self._crafty.server_stats(token, job.server_id)
             if not stats.get("importing"):
+                server = await self._crafty.get_server(token, job.server_id)
                 if prepared.loader == "fabric":
-                    return
+                    # `importing` is also false during the ~3 s Crafty waits before its
+                    # download starts, so only the jar on disk proves it finished.
+                    root = await self._crafty.list_dir(token, job.server_id, "")
+                    if any(e.name == server.get("executable") and not e.is_dir for e in root):
+                        return
                 # Crafty clears `importing` before its Forge/NeoForge installer runs; the
                 # installer rewrites the start command once it has succeeded.
-                server = await self._crafty.get_server(token, job.server_id)
-                if "--installServer" not in (server.get("execution_command") or ""):
+                elif "--installServer" not in (server.get("execution_command") or ""):
                     return
             if time.monotonic() >= deadline:
                 what = "download" if prepared.loader == "fabric" else "installer"
@@ -315,6 +320,16 @@ class ModpackServerCreator:
             else:  # Crafty takes the file name in an HTTP header, which must be ASCII
                 job.warnings.append(f"{relative} could not be sent to Crafty (non-ASCII name); "
                                     "upload it yourself.")
+        # Crafty's upload cannot create folders, and its folder creation is not recursive:
+        # create every needed folder, parents first.
+        folders = {parent for relative in sendable
+                   for parent in PurePosixPath(relative).parents if parent.parts}
+        job.begin("Creating folders", total=len(folders))
+        for folder in sorted(folders, key=lambda f: (len(f.parts), str(f))):
+            parent = str(folder.parent) if folder.parent.parts else ""
+            await self._crafty.create_folder(token, job.server_id, parent, folder.name)
+            job.done += 1
+
         job.begin("Uploading files to the server", total=len(sendable))
         limit = asyncio.Semaphore(TRANSFER_CONCURRENCY)
 

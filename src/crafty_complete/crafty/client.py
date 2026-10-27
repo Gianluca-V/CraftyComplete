@@ -231,6 +231,26 @@ class CraftyClient:
         except httpx.HTTPError as exc:
             raise CraftyError("unreachable", str(exc)) from exc
 
+    async def create_folder(self, token: str, server_id: str, parent: str, name: str) -> None:
+        """Create `parent/name` (its parent must exist). An existing folder is fine.
+
+        Crafty's upload cannot create folders: it checks free disk space on the target
+        folder first and fails with HTTP 500 when the folder does not exist yet.
+        """
+        try:
+            response = await self._http.put(
+                f"/api/v2/servers/{server_id}/files/create",
+                json={"parent": parent, "name": name, "directory": True},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        except httpx.HTTPError as exc:
+            raise CraftyError("unreachable", str(exc)) from exc
+        body = _json(response)
+        if response.status_code == 400 and body.get("error") == "FILE EXISTS":
+            return
+        if response.status_code != 200 or body.get("status") != "ok":
+            self._raise_for(response, body)
+
     async def jar_catalog(self, token: str) -> dict[str, Any]:
         """Crafty's server jar catalog ("big bucket"): categories -> types -> versions."""
         return await self._get("/api/v2/crafty/JarCache", token) or {}

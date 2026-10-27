@@ -130,7 +130,14 @@ class CreationFakes(FakeServices):
         self.loader = loader
         self.created: list[dict] = []
         self.stats_polls = 0
-        self.importing_polls = 2  # stats report importing for this many polls
+        # Crafty sleeps 3 s before marking the server as importing, so the first poll
+        # sees importing=False with no jar yet; then importing for this many polls.
+        self.importing_polls = 2
+        self.jar_ready = False
+        self.upload_before_jar = False
+        # Folders that exist in the new server (Crafty's upload cannot create them).
+        self.folders = {""}
+        self.created_folders: list[str] = []
         self.installer_polls = 2  # execution_command keeps --installServer this long
         self.install_never_finishes = False
         self.can_create = True
@@ -194,8 +201,31 @@ class CreationFakes(FakeServices):
                 "new_server_id": NEW_SERVER, "new_server_uuid": NEW_SERVER}})
         if path == f"/api/v2/servers/{NEW_SERVER}/stats":
             self.stats_polls += 1
-            return httpx.Response(200, json={"status": "ok", "data": {
-                "importing": self.stats_polls <= self.importing_polls}})
+            importing = 2 <= self.stats_polls <= 1 + self.importing_polls
+            if self.stats_polls > 1 + self.importing_polls and not self.install_never_finishes:
+                self.jar_ready = True
+            return httpx.Response(200, json={"status": "ok", "data": {"importing": importing}})
+        if path == f"/api/v2/servers/{NEW_SERVER}/files" and request.method == "POST":
+            folder = json.loads(request.content)["path"]
+            data = {"root_path": {"local_path": folder}}
+            if folder == "" and self.jar_ready:
+                data["fabric.jar"] = {"path": "fabric.jar", "dir": False}
+            for name in sorted(self.folders - {""}):
+                parent, _, leaf = name.rpartition("/")
+                if parent == folder:
+                    data[leaf] = {"path": name, "dir": True}
+            return httpx.Response(200, json={"status": "ok", "data": data})
+        if path == f"/api/v2/servers/{NEW_SERVER}/files/create" and request.method == "PUT":
+            body = json.loads(request.content)
+            assert body["directory"] is True
+            target = f"{body['parent']}/{body['name']}".strip("/")
+            if body["parent"].strip("/") not in self.folders:
+                return httpx.Response(500, text="FileNotFoundError")  # os.mkdir, not makedirs
+            if target in self.folders:
+                return httpx.Response(400, json={"status": "error", "error": "FILE EXISTS"})
+            self.folders.add(target)
+            self.created_folders.append(target)
+            return httpx.Response(200, json={"status": "ok"})
         if path == f"/api/v2/servers/{NEW_SERVER}" and request.method == "GET":
             self.installer_polls -= 1
             installing = self.install_never_finishes or self.installer_polls >= 0
@@ -203,7 +233,9 @@ class CreationFakes(FakeServices):
                        if installing and self.loader != "fabric"
                        else "java -Xms1024M -Xmx4096M @libraries/x/unix_args.txt nogui")
             return httpx.Response(200, json={"status": "ok", "data": {
-                "server_id": NEW_SERVER, "server_name": "My Pack", "execution_command": command}})
+                "server_id": NEW_SERVER, "server_name": "My Pack", "execution_command": command,
+                "executable": "fabric.jar" if self.loader == "fabric"
+                else "forge-installer-1.20.1.jar"}})
         if path == f"/api/v2/servers/{NEW_SERVER}/files/upload":
             return self._new_server_upload(request)
         if path.startswith(f"/api/v2/servers/{NEW_SERVER}/files/") and path.endswith("/download"):
@@ -213,6 +245,11 @@ class CreationFakes(FakeServices):
     def _new_server_upload(self, request: httpx.Request) -> httpx.Response:
         headers = request.headers
         location, name = headers["location"], headers["fileName"]
+        if location.strip("/") not in self.folders:
+            # Crafty checks free disk space on the folder before creating it -> HTTP 500.
+            return httpx.Response(500, text="FileNotFoundError")
+        if self.loader == "fabric" and not self.jar_ready:
+            self.upload_before_jar = True
         target = f"{location}/{name}".lstrip("/")
         if headers.get("chunked") == "true":
             file_id = headers["fileId"]
@@ -342,6 +379,107 @@ def test_installer_that_never_finishes_fails_naming_the_server(tmp_path, db):
         "Crafty created \"My Pack\" but its NeoForge installer did not finish in time. "
         "Check the server's terminal in Crafty, then delete the server there and try again.")
     assert fakes.server_files == {}
+
+
+def test_folders_are_created_parents_first_before_uploading(tmp_path, db):
+    fakes = CreationFakes(pack=build_mrpack(entries={
+        "overrides/config/deep/nested/c.toml": b"deep", "overrides/config/a.toml": b"a"}))
+    client = creation_client(fakes, db, tmp_path)
+    job = wait_for(client, start(client).json()["job_id"])
+    client.__exit__(None, None, None)
+
+    assert job["status"] == "succeeded", job
+    assert fakes.server_files["config/deep/nested/c.toml"] == b"deep"
+    order = fakes.created_folders
+    assert order.index("config") < order.index("config/deep") < order.index("config/deep/nested")
+    assert "mods" in order
+
+
+def test_existing_folders_are_reused(tmp_path, db):
+    fakes = CreationFakes()
+    fakes.folders |= {"mods", "config"}
+    client = creation_client(fakes, db, tmp_path)
+    job = wait_for(client, start(client).json()["job_id"])
+    client.__exit__(None, None, None)
+
+    assert job["status"] == "succeeded", job
+    assert "mods/mod-a.jar" in fakes.server_files
+
+
+def test_fabric_wait_covers_crafty_start_delay(tmp_path, db):
+    """Crafty reports importing=False for about 3 s before its download starts."""
+    fakes = CreationFakes()
+    client = creation_client(fakes, db, tmp_path)
+    job = wait_for(client, start(client).json()["job_id"])
+    client.__exit__(None, None, None)
+
+    assert job["status"] == "succeeded", job
+    assert fakes.upload_before_jar is False
+    assert fakes.stats_polls >= 4
+
+
+def test_fabric_download_that_never_finishes_fails(tmp_path, db):
+    fakes = CreationFakes()
+    fakes.install_never_finishes = True
+    client = creation_client(fakes, db, tmp_path, modpack_install_timeout_minutes=0.001)
+    job = wait_for(client, start(client).json()["job_id"])
+    client.__exit__(None, None, None)
+
+    assert job["status"] == "failed"
+    assert job["error"].startswith('Crafty created "My Pack" but its Fabric download did not')
+    assert fakes.server_files == {}
+
+
+def test_duplicate_paths_are_rejected(tmp_path):
+    pack = build_mrpack(files=[pack_file("mods/a.jar", MOD_A), pack_file("mods/a.jar", MOD_B)])
+    with pytest.raises(MrpackError) as error:
+        read_index(write_pack(tmp_path, pack))
+
+    assert str(error.value) == "The modpack lists mods/a.jar more than once."
+
+
+def test_oversized_overrides_are_rejected(tmp_path, monkeypatch):
+    monkeypatch.setattr("crafty_complete.modpacks.mrpack.MAX_OVERRIDES_BYTES", 10)
+    with pytest.raises(MrpackError) as error:
+        read_index(write_pack(tmp_path, build_mrpack()))
+
+    assert str(error.value) == "The modpack's overrides unpack to more than 10 bytes."
+
+
+def test_unexpected_errors_do_not_leak_details(tmp_path, db, monkeypatch):
+    async def boom(*args, **kwargs):
+        raise OSError("[Errno 2] C:/secret/path/work")
+
+    fakes = CreationFakes()
+    client = creation_client(fakes, db, tmp_path)
+    monkeypatch.setattr(client.app.state.catalog, "download_to_file", boom)
+    job = wait_for(client, start(client).json()["job_id"])
+    client.__exit__(None, None, None)
+
+    assert job["status"] == "failed"
+    assert job["error"] == "Unexpected error; see the craftyComplete log for details."
+
+
+def test_api_prefers_the_newest_release(tmp_path, db):
+    fakes = CreationFakes()
+    client = creation_client(fakes, db, tmp_path)
+    original = fakes._modrinth
+
+    def with_beta(request):
+        if request.url.path == "/v2/project/PM/version":
+            release = original(request).json()[0]
+            beta = {**release, "id": "pk-beta", "version_number": "2.0-beta",
+                    "version_type": "beta"}
+            return httpx.Response(200, json=[beta, release])
+        return original(request)
+
+    fakes._modrinth = with_beta
+    response = start(client, version_id=None)
+    job = wait_for(client, response.json()["job_id"])
+    client.__exit__(None, None, None)
+
+    assert job["status"] == "succeeded", job
+    assert job["title"] == "A Pack 1.0.0"
 
 
 def test_client_only_mods_are_skipped_even_without_env(tmp_path, db):

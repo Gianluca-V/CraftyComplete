@@ -25,7 +25,7 @@ To **create a server from a modpack**, open the Modpacks tab, press **Create ser
 
 1. downloads the `.mrpack` and every server file it lists, checking each against the pack's SHA-1/SHA-512, and drops mods Modrinth marks as client-only (nothing is created in Crafty if any of this fails);
 2. asks Crafty to create the server and install the loader. Crafty installs the newest loader build it offers for that Minecraft version; you get a warning when that differs from the version the pack names;
-3. uploads the pack's mods and `overrides/` (then `server-overrides/`) to the server and records it as adopted, linked to the modpack version.
+3. creates the folders the pack needs and uploads its mods and `overrides/` (then `server-overrides/`) to the server and records it as adopted, linked to the modpack version.
 
 Quilt modpacks are not supported yet. If a step fails after Crafty created the server, the error names it so you can delete it in Crafty.
 

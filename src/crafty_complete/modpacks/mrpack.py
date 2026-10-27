@@ -13,6 +13,8 @@ OVERRIDE_FOLDERS = ("overrides/", "server-overrides/")
 ALLOWED_DOWNLOAD_HOSTS = {"cdn.modrinth.com", "github.com", "raw.githubusercontent.com",
                           "gitlab.com"}
 LOADERS = {"fabric-loader": "fabric", "forge": "forge", "neoforge": "neoforge"}
+# Bound on what overrides may unpack to, so a hostile archive cannot fill the disk.
+MAX_OVERRIDES_BYTES = 4 * 1024**3
 
 
 class MrpackError(Exception):
@@ -69,6 +71,7 @@ def read_index(pack_path: Path) -> PackIndex:
         with zipfile.ZipFile(pack_path) as archive:
             index = json.loads(archive.read(INDEX_FILE))
             entries = archive.namelist()
+            unpacked_sizes = {info.filename: info.file_size for info in archive.infolist()}
     except (zipfile.BadZipFile, KeyError, ValueError) as exc:
         raise MrpackError("The downloaded file is not a valid .mrpack.") from exc
 
@@ -89,6 +92,11 @@ def read_index(pack_path: Path) -> PackIndex:
         _server_file(entry) for entry in index.get("files") or []
         if (entry.get("env") or {}).get("server", "required") != "unsupported"
     ]
+    seen: set[str] = set()
+    for pack_file in server_files:
+        if pack_file.path in seen:  # two downloads into one file could mix their bytes
+            raise MrpackError(f"The modpack lists {pack_file.path} more than once.")
+        seen.add(pack_file.path)
 
     overrides: dict[str, str] = {}
     for folder in OVERRIDE_FOLDERS:
@@ -99,6 +107,10 @@ def read_index(pack_path: Path) -> PackIndex:
                 except MrpackError:
                     raise MrpackError(f"The modpack contains an unsafe path: {name}") from None
                 overrides[relative] = name
+
+    if sum(unpacked_sizes[entry] for entry in overrides.values()) > MAX_OVERRIDES_BYTES:
+        raise MrpackError(
+            f"The modpack's overrides unpack to more than {MAX_OVERRIDES_BYTES} bytes.")
 
     return PackIndex(
         name=index.get("name") or "Modpack",
