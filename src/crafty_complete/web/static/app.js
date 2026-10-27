@@ -83,6 +83,12 @@ function renderCard(project) {
   );
 }
 
+function redirectIfLoggedOut(response) {
+  if (response.status !== 401) return false;
+  window.location.assign("/login");
+  return true;
+}
+
 function setStatus(message, isError = false) {
   const status = $("status");
   status.textContent = message;
@@ -110,6 +116,7 @@ async function search() {
     const response = await fetch(`/api/catalog/search?${params}`, {
       signal: searchController.signal,
     });
+    if (redirectIfLoggedOut(response)) return;
     const body = await response.json();
     if (!response.ok) throw new Error(body.detail || `HTTP ${response.status}`);
 
@@ -143,6 +150,7 @@ function renderChecks(container, values, selected) {
 async function loadFilters() {
   try {
     const response = await fetch(`/api/catalog/filters?type=${state.type}`);
+    if (redirectIfLoggedOut(response)) return;
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const filters = await response.json();
 
@@ -211,6 +219,11 @@ function bindEvents() {
 
   $("prev").addEventListener("click", () => { state.page -= 1; search(); window.scrollTo(0, 0); });
   $("next").addEventListener("click", () => { state.page += 1; search(); window.scrollTo(0, 0); });
+
+  $("logout").addEventListener("click", async () => {
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    window.location.assign("/login");
+  });
 
   $("toggle-filters").addEventListener("click", (event) => {
     const open = $("filters").classList.toggle("is-open");

@@ -1,8 +1,6 @@
 import httpx
 
-from tests.conftest import make_client
-
-CRAFTY = "https://crafty.local:8443"
+from tests.conftest import CRAFTY, make_client
 
 
 def test_health_reports_not_configured_without_crafty_url():

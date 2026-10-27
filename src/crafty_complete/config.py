@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     )
 
     crafty_url: str | None = None
+    # Optional service token, used only by /api/health. Users act with their own tokens.
     crafty_api_token: str | None = None
     # Crafty ships a self-signed certificate by default; set to false only on a trusted network.
     crafty_verify_tls: bool = True
@@ -19,6 +20,11 @@ class Settings(BaseSettings):
     # Modrinth asks every client to send a uniquely identifying User-Agent.
     user_agent: str = f"craftyComplete/{__version__}"
     http_timeout_seconds: float = 10.0
+
+    session_idle_minutes: float = 60
+    session_max_hours: float = 12
+    # None: mark the cookie Secure only when the request arrived over HTTPS.
+    session_cookie_secure: bool | None = None
 
     @property
     def crafty_configured(self) -> bool:

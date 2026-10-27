@@ -34,7 +34,41 @@ button, input, select { font: inherit; color: inherit; }
 
 .brand { color: var(--text); font-weight: 700; font-size: 18px; text-decoration: none; }
 .brand span { color: var(--accent); }
-.version { margin-left: auto; color: var(--muted); font-size: 13px; }
+.version { color: var(--muted); font-size: 13px; }
+.account { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+.username { color: var(--muted); }
+
+.login-body { min-height: 100vh; display: grid; place-items: center; padding: 16px; }
+.login-card {
+  width: min(380px, 100%);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 28px;
+}
+.login-card .brand { margin: 0; font-size: 24px; }
+.login-hint { color: var(--muted); margin: 4px 0 20px; }
+.field { display: grid; gap: 6px; margin-bottom: 14px; }
+.field input {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 11px;
+}
+.field input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.optional { color: var(--muted); font-size: 13px; }
+.primary {
+  width: 100%;
+  background: var(--accent);
+  color: var(--accent-text);
+  border: 0;
+  border-radius: 8px;
+  padding: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.primary:disabled { opacity: .6; cursor: default; }
+.login-card .version { margin: 16px 0 0; text-align: center; }
 
 .tabs { display: flex; gap: 4px; }
 .tab {

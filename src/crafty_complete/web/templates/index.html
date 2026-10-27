@@ -13,7 +13,10 @@
       <button class="tab is-active" role="tab" aria-selected="true" data-type="mod">Mods</button>
       <button class="tab" role="tab" aria-selected="false" data-type="modpack">Modpacks</button>
     </nav>
-    <span class="version">v{{ version }}</span>
+    <div class="account">
+      <span class="username">{{ username }}</span>
+      <button id="logout" class="ghost">Log out</button>
+    </div>
   </header>
 
   <main class="layout">

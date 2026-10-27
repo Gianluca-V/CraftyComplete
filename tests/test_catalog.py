@@ -5,7 +5,7 @@ import pytest
 
 from crafty_complete.catalog.models import SearchQuery
 from crafty_complete.catalog.modrinth import build_facets
-from tests.conftest import make_client
+from tests.conftest import make_logged_in_client as make_client
 
 HIT = {
     "project_id": "P7dR8mSH",
