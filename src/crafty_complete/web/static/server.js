@@ -74,6 +74,7 @@ function render(data) {
   if (data.loader) $("loader").value = data.loader;
   if (data.game_version) $("game-version").value = data.game_version;
 
+  $("modpack-panel").hidden = !data.adopted;
   $("check-updates").hidden = !data.adopted;
   $("update-all").hidden = !data.adopted;
   updateCount = data.counts.updates;
@@ -108,6 +109,7 @@ function setBusy(busy) {
   document.querySelectorAll("#server-page button").forEach((b) => { b.disabled = busy; });
   if (!busy) {
     $("update-all").disabled = updateCount === 0;
+    $("modpack-link").disabled = $("modpack-link-version").disabled;
     document.querySelectorAll("#mod-rows button[data-unknown]").forEach((b) => { b.disabled = true; });
   }
 }
@@ -168,6 +170,7 @@ async function scan() {
     });
     setStatus("");
     render(data);
+    await loadModpack();
   } catch (error) {
     setStatus(error.message, true);
   } finally {
@@ -197,14 +200,133 @@ async function loadGameVersions() {
   }
 }
 
+// ---- Modpack: link, update, follow the job ----
+
+function versionLabel(v) {
+  return `${v.version_number}${v.version_type && v.version_type !== "release" ? ` (${v.version_type})` : ""}`;
+}
+
+async function loadModpack() {
+  let status;
+  try {
+    status = await api(`${base}/modpack`);
+  } catch (error) {
+    $("modpack-info").textContent = error.message;
+    return;
+  }
+  $("modpack-linked").hidden = !status.linked;
+  $("modpack-link-form").hidden = Boolean(status.linked);
+  if (!status.linked) return;
+  const { linked, latest } = status;
+  $("modpack-info").replaceChildren(
+    el("strong", {}, linked.title), ` ${linked.version_number}`,
+    status.update_available
+      ? el("span", { class: "badge update-badge" }, `Update available: ${latest.version_number}`)
+      : el("span", { class: "badge ok-badge" }, "Up to date"));
+  const others = status.versions.filter((v) => v.id !== linked.version_id);
+  $("modpack-version").replaceChildren(
+    ...others.map((v) => el("option", { value: v.id }, versionLabel(v))));
+  if (latest && latest.id !== linked.version_id) $("modpack-version").value = latest.id;
+  $("modpack-update").disabled = others.length === 0;
+}
+
+/** Accepts "prominence-2" or "https://modrinth.com/modpack/prominence-2/versions". */
+function projectRef(text) {
+  const value = text.trim();
+  const match = value.match(/modrinth\.com\/modpack\/([A-Za-z0-9_.-]+)/);
+  return match ? match[1] : value;
+}
+
+async function findVersions() {
+  const select = $("modpack-link-version");
+  select.disabled = true;
+  $("modpack-link").disabled = true;
+  setStatus("Looking up the modpack on Modrinth…");
+  try {
+    const data = await api(`/api/modpacks/${encodeURIComponent(projectRef($("modpack-ref").value))}/versions`);
+    const loader = $("loader").value;
+    const game = $("game-version").value;
+    // The server's Minecraft version and loader narrow the list; the link checks them again.
+    const fits = data.versions.filter((v) =>
+      (!game || v.game_versions.includes(game)) && (!loader || v.loaders.includes(loader)));
+    const shown = fits.length ? fits : data.versions;
+    select.replaceChildren(...shown.map((v) => el("option", { value: v.id }, versionLabel(v))));
+    select.dataset.projectId = data.project_id;
+    select.disabled = shown.length === 0;
+    $("modpack-link").disabled = shown.length === 0;
+    setStatus(shown.length ? `${data.title}: pick the version this server runs.`
+      : `${data.title} has no versions.`, !shown.length);
+  } catch (error) {
+    setStatus(error.message, true);
+  }
+}
+
+function renderJob(job) {
+  $("job").hidden = false;
+  $("job-title").textContent = job.title;
+  const progress = job.progress.total ? ` (${job.progress.done}/${job.progress.total})` : "";
+  $("job-step").textContent = job.status === "running" ? `${job.step}${progress}…`
+    : job.status === "succeeded" ? "Done." : "Failed.";
+  $("job-progress").max = job.progress.total || 1;
+  $("job-progress").value = job.status === "succeeded" ? $("job-progress").max : job.progress.done;
+  $("job-warnings").replaceChildren(...job.warnings.map((w) => el("li", {}, w)));
+  $("job-error").textContent = job.error || "";
+  $("job-result").replaceChildren(...describeResult(job.result));
+}
+
+function describeResult(result) {
+  if (!result) return [];
+  const parts = [];
+  if ("added" in result) {
+    parts.push(`${result.added.length} added, ${result.updated.length} updated, ` +
+      `${result.removed.length} removed. Old files are in ${result.backup_folder}. `);
+    if (result.own_mods_kept.length) parts.push(`Kept your own mods: ${result.own_mods_kept.join(", ")}. `);
+    if (result.restart_required) parts.push(el("strong", {}, "Start the server in Crafty to apply the update."));
+  } else {
+    if (result.own_mods.length) parts.push(`Mods you added yourself: ${result.own_mods.join(", ")}. `);
+    if (result.missing.length) parts.push(`Pack files not on the server: ${result.missing.join(", ")}.`);
+  }
+  return parts;
+}
+
+async function startJob(path, body) {
+  setBusy(true);
+  setStatus("");
+  try {
+    const { job_id: jobId } = await api(path, { method: "POST", body });
+    while (true) {
+      const job = await api(`/api/jobs/${jobId}`);
+      renderJob(job);
+      if (job.status !== "running") break;
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+    render(await api(`${base}/mods`));
+    await loadModpack();
+  } catch (error) {
+    setStatus(error.message, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
 async function init() {
+  $("modpack-find").addEventListener("click", findVersions);
+  $("modpack-link-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const select = $("modpack-link-version");
+    startJob(`${base}/modpack/link`, { project_id: select.dataset.projectId, version_id: select.value });
+  });
+  $("modpack-update").addEventListener("click", () =>
+    startJob(`${base}/modpack/update`, { version_id: $("modpack-version").value }));
   $("scan").addEventListener("click", scan);
   $("check-updates").addEventListener("click", checkUpdates);
   $("update-all").addEventListener("click", () =>
     runAction($("update-all"), `${base}/update-all`, "Updating every unpinned mod…"));
   await Promise.all([loadServerName(), loadGameVersions()]);
   try {
-    render(await api(`${base}/mods`));
+    const data = await api(`${base}/mods`);
+    render(data);
+    if (data.adopted) await loadModpack();
   } catch (error) {
     setStatus(error.message, true);
     $("scan").disabled = true;

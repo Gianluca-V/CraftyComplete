@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import shutil
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -14,6 +15,8 @@ from crafty_complete.modpacks.jobs import Job, JobFailure
 from crafty_complete.modpacks.mrpack import MrpackError, PackIndex, read_index
 
 MAX_PACK_BYTES = 4 * 1024**3
+MAX_FILE_BYTES = 1024**3
+DOWNLOAD_CONCURRENCY = 4
 
 
 def check_hashes(path: str, expected_sha1: str | None, expected_sha512: str | None,
@@ -58,6 +61,66 @@ def describe_failure(exc: Exception) -> str:
 class PackReader:
     def __init__(self, modrinth: ModrinthProvider):
         self._modrinth = modrinth
+
+    async def download_files(self, job: Job, index: PackIndex, paths: set[str],
+                             workdir: Path) -> dict[str, Path]:
+        """Download the pack's server files at `paths`, verified. Server path -> local file."""
+        wanted = [f for f in index.server_files if f.path in paths]
+        files: dict[str, Path] = {}
+        job.begin("Downloading mods", total=len(wanted))
+        limit = asyncio.Semaphore(DOWNLOAD_CONCURRENCY)
+
+        async def fetch(pack_file) -> None:
+            target = workdir / "files" / pack_file.path
+            async with limit:
+                last_error: Exception | None = None
+                for url in pack_file.downloads:
+                    try:
+                        actual = await self._modrinth.download_to_file(url, target, MAX_FILE_BYTES)
+                        break
+                    except CatalogError as exc:
+                        last_error = exc
+                else:
+                    raise JobFailure(f"Could not download {pack_file.path}: {last_error}")
+            check_hashes(pack_file.path, pack_file.sha1, pack_file.sha512, actual)
+            files[pack_file.path] = target
+            job.done += 1
+
+        try:  # the first failure cancels the other downloads
+            async with asyncio.TaskGroup() as group:
+                for pack_file in wanted:
+                    group.create_task(fetch(pack_file))
+        except ExceptionGroup as group_error:
+            raise group_error.exceptions[0] from None
+        return files
+
+    async def extract_overrides(self, job: Job, index: PackIndex, pack_path: Path,
+                                paths: set[str], workdir: Path) -> dict[str, Path]:
+        """Unpack the pack's overrides at `paths`. Server path -> local file."""
+        wanted = {r: e for r, e in index.overrides.items() if r in paths}
+        job.begin("Unpacking overrides", total=len(wanted))
+        files: dict[str, Path] = {}
+
+        def extract() -> None:
+            with zipfile.ZipFile(pack_path) as archive:
+                for relative, entry in wanted.items():
+                    target = workdir / "overrides" / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with archive.open(entry) as source, target.open("wb") as handle:
+                        shutil.copyfileobj(source, handle)
+                    files[relative] = target
+                    job.done += 1
+
+        await asyncio.to_thread(extract)
+        return files
+
+    async def fetch_files(self, job: Job, index: PackIndex, pack_path: Path,
+                          paths: set[str], workdir: Path) -> dict[str, Path]:
+        """The pack's files at `paths`, from downloads or overrides (overrides win)."""
+        downloads = await self.download_files(
+            job, index, {p for p in paths if p not in index.overrides}, workdir)
+        return {**downloads,
+                **await self.extract_overrides(job, index, pack_path, paths, workdir)}
 
     async def fetch(self, job: Job, pack_file: dict[str, Any],
                     workdir: Path) -> tuple[Path, PackIndex]:

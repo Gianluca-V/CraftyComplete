@@ -12,8 +12,9 @@ from crafty_complete.modpacks.creator import (
     CreationRefused,
     ModpackServerCreator,
 )
-from crafty_complete.modpacks.linker import ModpackLinker, version_summary
+from crafty_complete.modpacks.linker import ModpackLinker, newest_update, version_summary
 from crafty_complete.modpacks.packs import describe_failure
+from crafty_complete.modpacks.updater import ModpackUpdater
 from crafty_complete.web.deps import crafty_failure, require_crafty, require_session
 from crafty_complete.web.server_routes import FILES_FORBIDDEN
 
@@ -139,12 +140,11 @@ async def modpack_status(server_id: ServerId, request: Request,
         if not server.modpack_project_id:
             return {"linked": None, "latest": None, "update_available": False, "versions": []}
         versions = await linker.compatible_versions(server.modpack_project_id, server)
-        latest = next((v for v in versions if v.get("version_type") == "release"),
-                      versions[0] if versions else None)
+        latest = newest_update(versions, server.modpack_version_id)
         return {
             "linked": server.to_dict()["modpack"],
             "latest": version_summary(latest) if latest else None,
-            "update_available": bool(latest and latest["id"] != server.modpack_version_id),
+            "update_available": latest is not None,
             "versions": [version_summary(v) for v in versions],
         }
 
@@ -163,6 +163,32 @@ async def link_modpack(server_id: ServerId, body: LinkRequest, request: Request,
     started = request.app.state.jobs.start(
         session.user_id, f"Link {target.project['title']} {target.version.get('version_number')}",
         lambda running_job: linker.link(running_job, server_id, target),
+        describe_failure,
+    )
+    return {"job_id": started.id}
+
+
+class UpdateRequest(BaseModel):
+    # Default: the newest release for the server's Minecraft version and loader.
+    version_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_.-]{1,64}$")
+
+
+@router.post("/servers/{server_id}/modpack/update", status_code=202)
+async def update_modpack(server_id: ServerId, body: UpdateRequest, request: Request,
+                         session: Session = Depends(require_session)) -> dict:
+    """Move a linked, stopped server to another version of its modpack."""
+    _linker(request)
+    updater: ModpackUpdater = request.app.state.modpack_updater
+    server, target = await _guarded(request, session, lambda: updater.prepare(
+        session.crafty_token, server_id, body.version_id))
+    if request.app.state.jobs.running(session.user_id):
+        raise HTTPException(status_code=409, detail=JOB_RUNNING)
+    token = session.crafty_token
+    started = request.app.state.jobs.start(
+        session.user_id,
+        f"Update {server.modpack_title} {server.modpack_version_number} → "
+        f"{target.version.get('version_number')}",
+        lambda running_job: updater.run(running_job, token, server_id, target),
         describe_failure,
     )
     return {"job_id": started.id}

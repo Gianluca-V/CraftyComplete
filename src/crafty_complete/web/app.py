@@ -25,6 +25,7 @@ from crafty_complete.mods.update_checker import UpdateChecker
 from crafty_complete.modpacks.creator import ModpackServerCreator
 from crafty_complete.modpacks.jobs import JobRegistry
 from crafty_complete.modpacks.linker import ModpackLinker
+from crafty_complete.modpacks.updater import ModpackUpdater
 from crafty_complete.web.modpack_routes import ProjectRef
 from crafty_complete.web.modpack_routes import router as modpack_router
 from crafty_complete.web.deps import current_session, require_session
@@ -79,6 +80,9 @@ def create_app(
             app.state.crafty, app.state.catalog, adoption, store, locks, settings)
         app.state.modpack_linker = ModpackLinker(
             app.state.catalog, adoption, store, locks, settings)
+        app.state.modpack_updater = ModpackUpdater(
+            app.state.crafty, app.state.catalog, app.state.modpack_linker, adoption, store,
+            locks, settings)
         app.state.jobs = JobRegistry()
         checker.start()
         yield

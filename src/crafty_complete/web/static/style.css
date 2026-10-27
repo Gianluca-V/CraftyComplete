@@ -356,3 +356,15 @@ input[type="search"]:focus, select:focus, button:focus-visible {
   .card-icon { width: 56px; height: 56px; }
   .card-stats { grid-column: 2; display: flex; flex-wrap: wrap; gap: 4px 12px; }
 }
+
+.modpack-panel {
+  margin: 16px 0;
+  padding: 16px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.modpack-panel p { margin: 0 0 8px; }
+.modpack-panel .job { margin-top: 12px; max-width: none; }
+.modpack-panel input { min-width: 220px; }
+.modpack-panel .error { color: var(--danger); margin: 0; }

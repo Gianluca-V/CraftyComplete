@@ -35,6 +35,22 @@ def version_summary(version: dict[str, Any]) -> dict[str, Any]:
             "date_published": version.get("date_published")}
 
 
+def newest_update(versions: list[dict[str, Any]],
+                  current_id: str | None) -> dict[str, Any] | None:
+    """The version to offer as an update, from `versions` listed newest first.
+
+    Only versions newer than the current one count. A release wins; with no newer release,
+    a server already on a pre-release is offered the newest newer pre-release.
+    """
+    ids = [v["id"] for v in versions]
+    newer = versions[:ids.index(current_id)] if current_id in ids else versions
+    release = next((v for v in newer if v.get("version_type") == "release"), None)
+    current = versions[ids.index(current_id)] if current_id in ids else None
+    if release or not newer or (current and current.get("version_type") == "release"):
+        return release
+    return newer[0]
+
+
 class ModpackLinker:
     """Tie an adopted server to the Modrinth modpack version it runs.
 

@@ -31,6 +31,45 @@
     <button id="update-all" class="primary compact" hidden disabled>Update all</button>
   </section>
 
+  <section id="modpack-panel" class="modpack-panel" aria-label="Modpack" hidden>
+    <div id="modpack-linked" hidden>
+      <p id="modpack-info"></p>
+      <div class="toolbar">
+        <label class="inline-field">
+          Version
+          <select id="modpack-version"></select>
+        </label>
+        <button id="modpack-update" class="primary compact">Update modpack</button>
+      </div>
+      <p class="muted">Stop the server in Crafty first. Replaced and removed files are moved to
+        <code>.crafty-complete/backups</code>; mods you added yourself stay installed.
+        <a href="/">Add more mods</a></p>
+    </div>
+    <form id="modpack-link-form" hidden>
+      <p class="muted">Link this server to the Modrinth modpack it runs to update it as a whole.</p>
+      <div class="toolbar">
+        <label class="inline-field">
+          Modpack (slug or Modrinth URL)
+          <input id="modpack-ref" required placeholder="prominence-2">
+        </label>
+        <button id="modpack-find" type="button" class="ghost">Find versions</button>
+        <label class="inline-field">
+          Installed version
+          <select id="modpack-link-version" disabled></select>
+        </label>
+        <button id="modpack-link" class="primary compact" disabled>Link</button>
+      </div>
+    </form>
+    <div id="job" class="job" hidden>
+      <h2 id="job-title"></h2>
+      <p id="job-step" class="job-step"></p>
+      <progress id="job-progress" value="0" max="1"></progress>
+      <ul id="job-warnings" class="job-warnings"></ul>
+      <p id="job-error" class="error"></p>
+      <p id="job-result"></p>
+    </div>
+  </section>
+
   <div id="summary" class="summary" hidden></div>
   <p id="status" class="status" role="status" aria-live="polite"></p>
   <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>

@@ -251,6 +251,14 @@ class CraftyClient:
         if response.status_code != 200 or body.get("status") != "ok":
             self._raise_for(response, body)
 
+    async def move_file(self, token: str, server_id: str, source: str, target_folder: str) -> None:
+        """Move `source` into the existing folder `target_folder` (both server-relative)."""
+        await self._request(
+            "POST", f"/api/v2/servers/{server_id}/files/move", token,
+            json={"file_system_objects": [{"source_path": source,
+                                           "target_path": target_folder}]},
+        )
+
     async def jar_catalog(self, token: str) -> dict[str, Any]:
         """Crafty's server jar catalog ("big bucket"): categories -> types -> versions."""
         return await self._get("/api/v2/crafty/JarCache", token) or {}

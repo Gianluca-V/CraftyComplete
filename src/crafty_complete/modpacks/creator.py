@@ -2,22 +2,21 @@ import asyncio
 import shutil
 import tempfile
 import time
-import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from crafty_complete.catalog.models import CatalogError, CatalogNotFound
+from crafty_complete.catalog.models import CatalogNotFound
 from crafty_complete.catalog.modrinth import MODRINTH_CDN, ModrinthProvider
 from crafty_complete.config import Settings
-from crafty_complete.crafty.client import CraftyClient, CraftyError
+from crafty_complete.crafty.client import CraftyClient
 from crafty_complete.mods.adoption import AdoptionService
 from crafty_complete.mods.locks import ServerLocks
 from crafty_complete.mods.store import AdoptionStore
 from crafty_complete.modpacks.jobs import Job, JobFailure
+from crafty_complete.modpacks.transfer import ServerWriter, parent_of
 from crafty_complete.modpacks.packs import (
     PackReader,
-    check_hashes,
     describe_failure,
     file_sha1,
     is_mod_jar,
@@ -30,8 +29,6 @@ CRAFTY_TYPES = {"fabric": "fabric", "forge": "forge-installer", "neoforge": "neo
 LOADER_NAMES = {"fabric": "Fabric", "forge": "Forge", "neoforge": "NeoForge"}
 # The dependency key each loader uses in modrinth.index.json, for messages.
 PACK_LOADER_KEYS = {"fabric": "fabric-loader", "forge": "forge", "neoforge": "neoforge"}
-MAX_FILE_BYTES = 1024**3
-TRANSFER_CONCURRENCY = 4
 
 
 class CreationRefused(Exception):
@@ -63,9 +60,6 @@ class Prepared:
     pack_file: dict[str, Any]
 
 
-RETRIES = 3
-
-
 class ModpackServerCreator:
     """Create a Crafty server from a Modrinth modpack (.mrpack).
 
@@ -84,6 +78,7 @@ class ModpackServerCreator:
         self._locks = locks
         self._settings = settings
         self._packs = PackReader(modrinth)
+        self._writer = ServerWriter(crafty, settings)
 
     # --- before the job ------------------------------------------------------------
 
@@ -184,44 +179,7 @@ class ModpackServerCreator:
         # Decide what to keep before downloading, so client-only mods are never fetched.
         kept = await self._packs.drop_client_only(
             job, await self._packs.file_hashes(index, pack_path))
-        to_download = [f for f in index.server_files
-                       if f.path in kept and f.path not in index.overrides]
-        files: dict[str, Path] = {}
-        job.begin("Downloading mods", total=len(to_download))
-        limit = asyncio.Semaphore(TRANSFER_CONCURRENCY)
-
-        async def fetch(pack_file) -> None:
-            target = workdir / "files" / pack_file.path
-            async with limit:
-                last_error: Exception | None = None
-                for url in pack_file.downloads:
-                    try:
-                        actual = await self._modrinth.download_to_file(url, target, MAX_FILE_BYTES)
-                        break
-                    except CatalogError as exc:
-                        last_error = exc
-                else:
-                    raise JobFailure(f"Could not download {pack_file.path}: {last_error}")
-            check_hashes(pack_file.path, pack_file.sha1, pack_file.sha512, actual)
-            files[pack_file.path] = target
-            job.done += 1
-
-        await self._gather(fetch(f) for f in to_download)
-
-        overrides = {r: e for r, e in index.overrides.items() if r in kept}
-        job.begin("Unpacking overrides", total=len(overrides))
-
-        def extract() -> None:
-            with zipfile.ZipFile(pack_path) as archive:
-                for relative, entry in overrides.items():
-                    target = workdir / "overrides" / relative
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    with archive.open(entry) as source, target.open("wb") as handle:
-                        shutil.copyfileobj(source, handle)
-                    files[relative] = target
-                    job.done += 1
-
-        await asyncio.to_thread(extract)
+        files = await self._packs.fetch_files(job, index, pack_path, set(kept), workdir)
         pack_path.unlink(missing_ok=True)
         return files, kept
 
@@ -254,13 +212,13 @@ class ModpackServerCreator:
         job.begin(f"Installing {loader_name} in Crafty")
         deadline = time.monotonic() + self._settings.modpack_install_timeout_minutes * 60
         while True:
-            stats = await self._retry(lambda: self._crafty.server_stats(token, job.server_id))
+            stats = await self._writer.retry(lambda: self._crafty.server_stats(token, job.server_id))
             if not stats.get("importing"):
-                server = await self._retry(lambda: self._crafty.get_server(token, job.server_id))
+                server = await self._writer.retry(lambda: self._crafty.get_server(token, job.server_id))
                 if prepared.loader == "fabric":
                     # `importing` is also false during the ~3 s Crafty waits before its
                     # download starts, so only the jar on disk proves it finished.
-                    root = await self._retry(
+                    root = await self._writer.retry(
                         lambda: self._crafty.list_dir(token, job.server_id, ""))
                     if any(e.name == server.get("executable") and not e.is_dir for e in root):
                         return
@@ -285,29 +243,9 @@ class ModpackServerCreator:
             else:
                 job.warnings.append(f"{relative} could not be sent to Crafty (non-ASCII name); "
                                     "upload it yourself.")
-        # Crafty's upload cannot create folders, and its folder creation is not recursive:
-        # create every needed folder, parents first.
-        folders = {parent for relative in to_send
-                   for parent in PurePosixPath(relative).parents if parent.parts}
-        job.begin("Creating folders", total=len(folders))
-        for folder in sorted(folders, key=lambda f: (len(f.parts), str(f))):
-            parent = str(folder.parent) if folder.parent.parts else ""
-            await self._retry(lambda: self._crafty.create_folder(
-                token, job.server_id, parent, folder.name))
-            job.done += 1
-
-        job.begin("Uploading files to the server", total=len(to_send))
-        limit = asyncio.Semaphore(TRANSFER_CONCURRENCY)
-
-        async def send(relative: str, source: Path) -> None:
-            path = PurePosixPath(relative)
-            async with limit:
-                await self._retry(lambda: self._crafty.upload_path(
-                    token, job.server_id, str(path.parent) if path.parent.parts else "",
-                    path.name, source, self._settings.upload_chunk_bytes))
-            job.done += 1
-
-        await self._gather(send(r, s) for r, s in to_send.items())
+        await self._writer.create_folders(job, token, job.server_id,
+                                          {parent_of(r) for r in to_send})
+        await self._writer.upload(job, token, job.server_id, to_send)
 
     async def _record(self, job: Job, prepared: Prepared, files: dict[str, Path],
                       pack_hashes: dict[str, str | None]) -> None:
@@ -327,26 +265,3 @@ class ModpackServerCreator:
                          "version_number": prepared.version.get("version_number")})
             self._store.set_modpack_files(
                 job.server_id, {p: h for p, h in pack_hashes.items() if sendable(p)})
-
-    async def _retry(self, operation):
-        """Run a Crafty call, retrying network errors and 5xx-style failures.
-
-        Never used for creating the server itself, which must not happen twice.
-        """
-        for attempt in range(1, RETRIES + 1):
-            try:
-                return await operation()
-            except CraftyError as exc:
-                if exc.state not in ("unreachable", "error") or attempt == RETRIES:
-                    raise
-            await asyncio.sleep(self._settings.crafty_retry_seconds * attempt)
-
-    @staticmethod
-    async def _gather(coroutines) -> None:
-        """Run concurrently; the first failure cancels the rest and is re-raised as is."""
-        try:
-            async with asyncio.TaskGroup() as group:
-                for coroutine in coroutines:
-                    group.create_task(coroutine)
-        except ExceptionGroup as group_error:
-            raise group_error.exceptions[0] from None
