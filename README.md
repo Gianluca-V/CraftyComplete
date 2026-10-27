@@ -13,7 +13,13 @@ python -m venv .venv
 .venv/Scripts/python -m uvicorn crafty_complete.main:app --port 8500
 ```
 
-Open http://localhost:8500, log in with your Crafty account and browse Modrinth mods and modpacks. Under **Servers**, open a server and press **Adopt server** to identify the mods it already has and see which ones have updates.
+Open http://localhost:8500, log in with your Crafty account and browse Modrinth mods and modpacks. Under **Servers**, open a server and press **Adopt server** to identify the mods it already has and see which ones have updates. Then:
+
+- **Install** a mod from the browse page (pick the server under "Install to"); its missing required dependencies are installed too.
+- **Update** one mod, or **Update all** unpinned mods, from the server page.
+- **Check for updates** refreshes the "update available" badges; this also runs in the background. Nothing is ever updated without you pressing a button.
+
+Changed mods load the next time the server starts: restart it from Crafty.
 
 ## Authentication and permissions
 
@@ -38,6 +44,7 @@ Environment variables (or a `.env` file in the working directory):
 | `CRAFTY_COMPLETE_USER_AGENT` | `craftyComplete/<version>` | User-Agent sent to Modrinth |
 | `CRAFTY_COMPLETE_HTTP_TIMEOUT_SECONDS` | `10` | Timeout for outbound HTTP calls |
 | `CRAFTY_COMPLETE_DATABASE_PATH` | `crafty_complete.sqlite3` | SQLite file with adopted servers and their mods |
+| `CRAFTY_COMPLETE_UPDATE_CHECK_HOURS` | `6` | How often to look for mod updates in the background; `0` turns it off. It only marks updates as available |
 | `CRAFTY_COMPLETE_SESSION_IDLE_MINUTES` | `60` | Log out after this much inactivity |
 | `CRAFTY_COMPLETE_SESSION_MAX_HOURS` | `12` | Maximum session lifetime |
 | `CRAFTY_COMPLETE_SESSION_COOKIE_SECURE` | auto | `true`/`false` forces the cookie's `Secure` flag; by default it is set when the request arrived over HTTPS. Behind a reverse proxy that terminates TLS, set it to `true` (or run uvicorn with `--proxy-headers`). |
@@ -54,6 +61,12 @@ Everything except `/api/health`, `/login` and `/api/auth/login` requires a sessi
 - `POST /api/servers/{server_id}/scan` — adopt the server (first call) or rescan it. JSON body `{"loader"?, "game_version"?}` overrides the detected loader (`fabric`, `forge`, `neoforge`, `quilt`) and Minecraft version; otherwise the previous values are kept, or they are inferred from the identified mods. Reads every `mods/*.jar` through Crafty, identifies it on Modrinth by SHA-1 and checks for a newer compatible version. Nothing is updated. Answers `403` without Crafty file access to the server, `404` when the server has no `mods` folder, `502` when Modrinth fails (nothing is saved then).
 - `GET /api/servers/{server_id}/mods` — the stored result of the last scan (`adopted: false` before the first one). Each mod has `state` (`identified` or `unknown`), current and latest version, `update_available`, `pinned` and Modrinth's `server_side`; `counts.updates` excludes pinned mods.
 - `PATCH /api/servers/{server_id}/mods/{file_name}` — JSON `{"pinned": true|false}`. A pinned mod is never offered for update; the pin follows the Modrinth project (or the exact file, for unknown jars) across rescans.
+- `POST /api/servers/{server_id}/mods` — JSON `{"project_id": "<Modrinth id or slug>"}`. Installs the newest compatible release for the server's loader and Minecraft version (Quilt servers also accept Fabric mods), plus missing required dependencies. Refuses client-only projects and modpacks (`422`), projects with no compatible version (`422`), projects already installed, mods declared incompatible with an installed one, or a different file already using the target name (`409`), and servers not adopted yet (`409`). Dependencies that are client-only or have no compatible version, and files Modrinth does not host, are reported under `skipped` for you to handle by hand.
+- `POST /api/servers/{server_id}/mods/{file_name}/update` — update one mod to its latest compatible version (`409` when pinned, unknown or already up to date).
+- `POST /api/servers/{server_id}/update-all` — update every unpinned mod that has an update; failures are listed under `failed` and do not stop the rest.
+- `POST /api/servers/{server_id}/check-updates` — refresh `latest_version_*` and `update_available` from the stored hashes, without downloading jars. Returns the server like `GET .../mods`, including `updates_checked_at`.
+
+Install and update responses contain `installed`, `updated`, `skipped`, `failed`, `restart_required` and the refreshed `server`. Every download must come from `https://cdn.modrinth.com/` and match Modrinth's published SHA-1 and SHA-512, or nothing is written. A replaced jar is deleted only after its new version has been uploaded. The bodyless `POST` endpoints still require `Content-Type: application/json` (`415` otherwise).
 
 Server endpoints check, with your own Crafty token, that you have Crafty's **Files** permission on the server before reading or changing anything stored about it (the Backup permission alone is not enough). The check asks Crafty to download a file that does not exist, `.crafty-complete-permission-check`, which Crafty answers with "not found" only when the permission is granted.
 - `GET /api/catalog/search` — search Modrinth. Query parameters:

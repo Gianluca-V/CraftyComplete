@@ -57,6 +57,35 @@ async function api(path, options = {}) {
   return body;
 }
 
+/** Render the result of an install/update call into `container`. */
+function showOutcome(container, outcome) {
+  const lines = [];
+  for (const item of outcome.installed || []) {
+    lines.push(el("li", { class: "ok" },
+      `Installed ${item.title} ${item.version_number}${item.dependency ? " (dependency)" : ""}`));
+  }
+  for (const item of outcome.updated || []) {
+    lines.push(el("li", { class: "ok" },
+      `Updated ${item.title} ${item.from_version || ""} → ${item.to_version}`));
+  }
+  for (const item of outcome.skipped || []) {
+    const line = el("li", { class: "warn" }, `Skipped ${item.title}: ${item.reason}`);
+    const url = safeUrl(item.url);
+    if (url) line.append(" ", el("a", { href: url, target: "_blank", rel: "noopener" }, "Download"));
+    lines.push(line);
+  }
+  for (const item of outcome.failed || []) {
+    lines.push(el("li", { class: "error" }, `Could not update ${item.title}: ${item.reason}`));
+  }
+  if (!lines.length) lines.push(el("li", {}, "Nothing to do."));
+  container.replaceChildren(el("ul", {}, ...lines));
+  if (outcome.restart_required) {
+    container.append(el("p", { class: "restart" },
+      "Restart the server in Crafty to load the changes."));
+  }
+  container.hidden = false;
+}
+
 $("logout").addEventListener("click", async () => {
   await fetch("/api/auth/logout", {
     method: "POST",

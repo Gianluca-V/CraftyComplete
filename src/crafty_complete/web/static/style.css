@@ -287,8 +287,28 @@ input[type="search"]:focus, select:focus, button:focus-visible {
 .muted-badge { background: var(--surface-2); color: var(--muted); }
 .warn-badge { background: rgba(242, 179, 91, .15); color: #f2b35b; }
 
+.toolbar-spacer { flex: 1; }
+.install-target { margin-top: 12px; }
+.install-target select { min-width: 200px; }
+.card-stats .install { margin-top: 8px; }
+
+.notice {
+  margin: 12px 0;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.notice ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.notice .ok { color: var(--accent); }
+.notice .warn { color: #f2b35b; }
+.notice .error { color: var(--danger); margin: 0; }
+.notice a { color: inherit; }
+.notice .restart { margin: 8px 0 0; color: var(--muted); }
+
 @media (max-width: 800px) {
   .page { padding: 16px; }
+  .toolbar-spacer { display: none; }
   .main-nav { order: 3; width: 100%; }
   .mod-table th:nth-child(2), .mod-table td:nth-child(2) { white-space: normal; }
   .topbar { padding: 12px 16px; gap: 12px; flex-wrap: wrap; }

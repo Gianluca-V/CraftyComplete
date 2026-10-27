@@ -8,6 +8,11 @@ SortOrder = Literal["relevance", "downloads", "follows", "newest", "updated"]
 SERVER_LOADERS: tuple[str, ...] = ("fabric", "forge", "neoforge", "quilt")
 
 
+def compatible_loaders(loader: str) -> list[str]:
+    """Loaders whose mods a server running `loader` can load (Quilt also loads Fabric mods)."""
+    return ["quilt", "fabric"] if loader == "quilt" else [loader]
+
+
 @dataclass(frozen=True)
 class SearchQuery:
     text: str = ""
@@ -59,6 +64,10 @@ class CatalogFilters:
 
 class CatalogError(Exception):
     """A catalog provider could not answer."""
+
+
+class CatalogNotFound(CatalogError):
+    """The requested project or version does not exist."""
 
 
 class CatalogProvider(Protocol):

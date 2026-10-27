@@ -5,14 +5,15 @@ from pathlib import Path
 
 from crafty_complete.mods.models import AdoptedServer, InstalledMod
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS adopted_servers (
-    server_id    TEXT PRIMARY KEY,
-    loader       TEXT,
-    game_version TEXT,
-    scanned_at   TEXT NOT NULL
+    server_id          TEXT PRIMARY KEY,
+    loader             TEXT,
+    game_version       TEXT,
+    scanned_at         TEXT NOT NULL,
+    updates_checked_at TEXT
 );
 CREATE TABLE IF NOT EXISTS server_mods (
     server_id             TEXT NOT NULL REFERENCES adopted_servers(server_id) ON DELETE CASCADE,
@@ -33,7 +34,17 @@ CREATE TABLE IF NOT EXISTS server_mods (
 );
 """
 
+# Applied in order to databases created by older versions (index = version it upgrades from).
+MIGRATIONS = {
+    1: "ALTER TABLE adopted_servers ADD COLUMN updates_checked_at TEXT",
+}
+
 MOD_COLUMNS = [f.name for f in fields(InstalledMod)]
+UPDATABLE_MOD_COLUMNS = set(MOD_COLUMNS) - {"file_name"}
+
+
+def _mod(row: sqlite3.Row) -> InstalledMod:
+    return InstalledMod(**{**{c: row[c] for c in MOD_COLUMNS}, "pinned": bool(row["pinned"])})
 
 
 class AdoptionStore:
@@ -47,11 +58,22 @@ class AdoptionStore:
         self._lock = threading.Lock()
         with self._lock, self._db:
             self._db.execute("PRAGMA foreign_keys = ON")
+            current = self._db.execute("PRAGMA user_version").fetchone()[0]
+            exists = self._db.execute(
+                "SELECT 1 FROM sqlite_master WHERE name = 'adopted_servers'"
+            ).fetchone()
+            if exists:
+                for version in range(current or 1, SCHEMA_VERSION):
+                    self._db.execute(MIGRATIONS[version])
             self._db.executescript(SCHEMA)
             self._db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def close(self) -> None:
         self._db.close()
+
+    def server_ids(self) -> list[str]:
+        with self._lock:
+            return [r[0] for r in self._db.execute("SELECT server_id FROM adopted_servers")]
 
     def get(self, server_id: str) -> AdoptedServer:
         with self._lock:
@@ -63,32 +85,77 @@ class AdoptionStore:
             mod_rows = self._db.execute(
                 "SELECT * FROM server_mods WHERE server_id = ?", (server_id,)
             ).fetchall()
-        mods = [
-            InstalledMod(**{**{c: r[c] for c in MOD_COLUMNS}, "pinned": bool(r["pinned"])})
-            for r in mod_rows
-        ]
         return AdoptedServer(
             server_id=server_id, loader=row["loader"], game_version=row["game_version"],
-            scanned_at=row["scanned_at"], mods=mods,
+            scanned_at=row["scanned_at"], updates_checked_at=row["updates_checked_at"],
+            mods=[_mod(r) for r in mod_rows],
         )
 
     def save(self, server: AdoptedServer) -> None:
         """Replace everything stored for this server in one transaction."""
-        placeholders = ", ".join("?" for _ in MOD_COLUMNS)
         with self._lock, self._db:
             self._db.execute("DELETE FROM server_mods WHERE server_id = ?", (server.server_id,))
             self._db.execute(
-                "INSERT INTO adopted_servers (server_id, loader, game_version, scanned_at) "
-                "VALUES (?, ?, ?, ?) ON CONFLICT(server_id) DO UPDATE SET "
+                "INSERT INTO adopted_servers "
+                "(server_id, loader, game_version, scanned_at, updates_checked_at) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(server_id) DO UPDATE SET "
                 "loader = excluded.loader, game_version = excluded.game_version, "
-                "scanned_at = excluded.scanned_at",
-                (server.server_id, server.loader, server.game_version, server.scanned_at),
+                "scanned_at = excluded.scanned_at, "
+                "updates_checked_at = excluded.updates_checked_at",
+                (server.server_id, server.loader, server.game_version, server.scanned_at,
+                 server.updates_checked_at),
             )
+            self._insert_mods(server.server_id, server.mods)
+
+    def _insert_mods(self, server_id: str, mods: list[InstalledMod]) -> None:
+        placeholders = ", ".join("?" for _ in MOD_COLUMNS)
+        self._db.executemany(
+            f"INSERT OR REPLACE INTO server_mods (server_id, {', '.join(MOD_COLUMNS)}) "
+            f"VALUES (?, {placeholders})",
+            [(server_id, *(getattr(mod, c) for c in MOD_COLUMNS)) for mod in mods],
+        )
+
+    def put_mod(self, server_id: str, mod: InstalledMod, replaces: str | None = None) -> None:
+        """Insert or replace one mod, optionally dropping the record of the file it replaced."""
+        with self._lock, self._db:
+            if replaces and replaces != mod.file_name:
+                self._db.execute(
+                    "DELETE FROM server_mods WHERE server_id = ? AND file_name = ?",
+                    (server_id, replaces),
+                )
+            self._insert_mods(server_id, [mod])
+
+    def remove_mod(self, server_id: str, file_name: str) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "DELETE FROM server_mods WHERE server_id = ? AND file_name = ?",
+                (server_id, file_name),
+            )
+
+    def update_mod(self, server_id: str, file_name: str, **values) -> None:
+        unknown = set(values) - UPDATABLE_MOD_COLUMNS
+        if unknown:
+            raise ValueError(f"Unknown mod fields: {sorted(unknown)}")
+        assignments = ", ".join(f"{column} = ?" for column in values)
+        with self._lock, self._db:
+            self._db.execute(
+                f"UPDATE server_mods SET {assignments} WHERE server_id = ? AND file_name = ?",
+                (*values.values(), server_id, file_name),
+            )
+
+    def set_latest_versions(self, server_id: str, latest: dict[str, tuple[str, str] | None],
+                            checked_at: str) -> None:
+        """Record the newest compatible version per file name (None = no compatible version)."""
+        with self._lock, self._db:
             self._db.executemany(
-                f"INSERT INTO server_mods (server_id, {', '.join(MOD_COLUMNS)}) "
-                f"VALUES (?, {placeholders})",
-                [(server.server_id, *(getattr(mod, c) for c in MOD_COLUMNS))
-                 for mod in server.mods],
+                "UPDATE server_mods SET latest_version_id = ?, latest_version_number = ? "
+                "WHERE server_id = ? AND file_name = ?",
+                [(*(value or (None, None)), server_id, file_name)
+                 for file_name, value in latest.items()],
+            )
+            self._db.execute(
+                "UPDATE adopted_servers SET updates_checked_at = ? WHERE server_id = ?",
+                (checked_at, server_id),
             )
 
     def set_pinned(self, server_id: str, file_name: str, pinned: bool) -> InstalledMod | None:

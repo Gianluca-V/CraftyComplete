@@ -2,6 +2,8 @@
 
 const serverId = $("server-page").dataset.serverId;
 const base = `/api/servers/${encodeURIComponent(serverId)}`;
+// Updates available (excluding pinned mods) in the last render.
+let updateCount = 0;
 
 function setStatus(message, isError = false) {
   $("status").textContent = message;
@@ -42,8 +44,21 @@ function renderMod(mod) {
     "aria-pressed": String(mod.pinned),
     title: mod.pinned ? "Allow updates for this mod" : "Never update this mod",
   }, mod.pinned ? "Unpin" : "Pin");
-  if (mod.state === "unknown") pin.disabled = true;
+  if (mod.state === "unknown") {
+    pin.disabled = true;
+    pin.dataset.unknown = "true";
+  }
   pin.addEventListener("click", () => togglePin(mod, pin));
+
+  const actions = el("td", { class: "pin-cell" });
+  if (mod.update_available && !mod.pinned) {
+    const update = el("button", { class: "primary compact" }, "Update");
+    update.addEventListener("click", () =>
+      runAction(update, `${base}/mods/${encodeURIComponent(mod.file_name)}/update`,
+                `Updating ${mod.title || mod.file_name}…`));
+    actions.append(update, " ");
+  }
+  actions.append(pin);
 
   return el("tr", {},
     el("td", {},
@@ -51,13 +66,19 @@ function renderMod(mod) {
         el("div", {}, name, el("div", { class: "file-name" }, mod.file_name)))),
     version,
     el("td", {}, el("div", { class: "badges" }, ...statusBadges(mod))),
-    el("td", { class: "pin-cell" }, pin));
+    actions);
 }
 
 function render(data) {
   $("scan").textContent = data.adopted ? "Rescan" : "Adopt server";
   if (data.loader) $("loader").value = data.loader;
   if (data.game_version) $("game-version").value = data.game_version;
+
+  $("check-updates").hidden = !data.adopted;
+  $("update-all").hidden = !data.adopted;
+  updateCount = data.counts.updates;
+  $("update-all").disabled = !updateCount;
+  $("update-all").textContent = data.counts.updates ? `Update all (${data.counts.updates})` : "Update all";
 
   if (!data.adopted) {
     $("scan-info").textContent = "Not adopted yet. Adopting reads the mods folder and identifies each jar on Modrinth.";
@@ -67,7 +88,8 @@ function render(data) {
   }
   const detected = [data.loader, data.game_version].filter(Boolean).join(" ");
   $("scan-info").textContent =
-    `${detected || "Loader and version unknown"} · scanned ${relativeDate(data.scanned_at)}`;
+    `${detected || "Loader and version unknown"} · scanned ${relativeDate(data.scanned_at)}` +
+    (data.updates_checked_at ? ` · updates checked ${relativeDate(data.updates_checked_at)}` : "");
   const c = data.counts;
   $("summary").replaceChildren(
     el("span", {}, el("strong", {}, String(c.identified)), " identified"),
@@ -79,6 +101,43 @@ function render(data) {
   $("mod-rows").replaceChildren(...data.mods.map(renderMod));
   $("mod-table").hidden = data.mods.length === 0;
   if (!data.mods.length) setStatus("The mods folder has no .jar files.");
+}
+
+function setBusy(busy) {
+  document.querySelectorAll("#server-page button").forEach((b) => { b.disabled = busy; });
+  if (!busy) {
+    $("update-all").disabled = updateCount === 0;
+    document.querySelectorAll("#mod-rows button[data-unknown]").forEach((b) => { b.disabled = true; });
+  }
+}
+
+/** POST an install/update action, show its outcome and re-render the table. */
+async function runAction(button, path, message) {
+  setBusy(true);
+  setStatus(message);
+  try {
+    const outcome = await api(path, { method: "POST", body: {} });
+    setStatus("");
+    showOutcome($("notice"), outcome);
+    render(outcome.server);
+  } catch (error) {
+    setStatus(error.message, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function checkUpdates() {
+  setBusy(true);
+  setStatus("Checking Modrinth for updates…");
+  try {
+    render(await api(`${base}/check-updates`, { method: "POST", body: {} }));
+    setStatus("");
+  } catch (error) {
+    setStatus(error.message, true);
+  } finally {
+    setBusy(false);
+  }
 }
 
 async function togglePin(mod, button) {
@@ -139,6 +198,9 @@ async function loadGameVersions() {
 
 async function init() {
   $("scan").addEventListener("click", scan);
+  $("check-updates").addEventListener("click", checkUpdates);
+  $("update-all").addEventListener("click", () =>
+    runAction($("update-all"), `${base}/update-all`, "Updating every unpinned mod…"));
   await Promise.all([loadServerName(), loadGameVersions()]);
   try {
     render(await api(`${base}/mods`));

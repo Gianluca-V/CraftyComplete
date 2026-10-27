@@ -23,6 +23,8 @@ class Settings(BaseSettings):
 
     # SQLite file holding adopted servers and their mods.
     database_path: str = "crafty_complete.sqlite3"
+    # How often to look for mod updates in the background (0 disables it). Never installs.
+    update_check_hours: float = 6
 
     session_idle_minutes: float = 60
     session_max_hours: float = 12

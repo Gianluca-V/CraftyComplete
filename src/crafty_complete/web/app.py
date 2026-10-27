@@ -18,7 +18,10 @@ from crafty_complete.crafty.client import CookielessTransport, CraftyClient, Cra
 from crafty_complete.web.auth_routes import router as auth_router
 from crafty_complete.web.catalog_routes import router as catalog_router
 from crafty_complete.mods.adoption import AdoptionService
+from crafty_complete.mods.installer import ModInstaller
+from crafty_complete.mods.locks import ServerLocks
 from crafty_complete.mods.store import AdoptionStore
+from crafty_complete.mods.update_checker import UpdateChecker
 from crafty_complete.web.deps import current_session, require_session
 from crafty_complete.web.server_routes import ServerId
 from crafty_complete.web.server_routes import router as server_router
@@ -57,13 +60,20 @@ def create_app(
         else:
             app.state.crafty = None
 
-        app.state.adoption_store = AdoptionStore(settings.database_path)
-        app.state.adoption = (
-            AdoptionService(app.state.crafty, app.state.catalog, app.state.adoption_store)
-            if app.state.crafty else None
-        )
+        store = app.state.adoption_store = AdoptionStore(settings.database_path)
+        locks = ServerLocks()
+        # Routes refuse to use these while Crafty is not configured (require_crafty);
+        # the background update check only needs Modrinth and the store.
+        adoption = app.state.adoption = AdoptionService(
+            app.state.crafty, app.state.catalog, store, locks)
+        app.state.installer = ModInstaller(
+            app.state.crafty, app.state.catalog, store, adoption, locks)
+        checker = app.state.update_checker = UpdateChecker(
+            adoption, store, settings.update_check_hours)
+        checker.start()
         yield
-        app.state.adoption_store.close()
+        await checker.stop()
+        store.close()
         await modrinth_http.aclose()
         if crafty_http:
             await crafty_http.aclose()

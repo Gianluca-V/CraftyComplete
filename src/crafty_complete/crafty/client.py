@@ -1,4 +1,5 @@
 import hashlib
+import uuid
 from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.parse import quote
@@ -171,6 +172,34 @@ class CraftyClient:
                 self._raise_for(response, body)
         except httpx.HTTPError as exc:
             raise CraftyError("unreachable", str(exc)) from exc
+
+    async def upload_file(self, token: str, server_id: str, location: str, file_name: str,
+                          data: bytes) -> None:
+        """Write `location/file_name` on the server, replacing any existing file."""
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "fileName": file_name,
+            "location": location,
+            # Required by Crafty to name its temp folder; any unique value works.
+            "fileId": uuid.uuid4().hex,
+            "fileSize": str(len(data)),
+            # No `chunked` header: Crafty treats any value, even "false", as true.
+        }
+        try:
+            response = await self._http.post(
+                f"/api/v2/servers/{server_id}/files/upload", content=data, headers=headers
+            )
+        except httpx.HTTPError as exc:
+            raise CraftyError("unreachable", str(exc)) from exc
+        body = _json(response)
+        if response.status_code != 200 or body.get("status") != "completed":
+            self._raise_for(response, body)
+
+    async def delete_file(self, token: str, server_id: str, path: str) -> None:
+        await self._request(
+            "DELETE", f"/api/v2/servers/{server_id}/files", token,
+            json={"file_system_objects": [{"filename": path}]},
+        )
 
     async def file_sha1(self, token: str, server_id: str, path: str) -> str | None:
         """Stream a server file through Crafty and return its SHA-1.

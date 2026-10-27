@@ -47,8 +47,51 @@ function renderCard(project) {
     el("div", { class: "card-stats" },
       el("span", {}, el("strong", {}, numberFormat.format(project.downloads)), " downloads"),
       el("span", {}, `${numberFormat.format(project.follows)} followers`),
-      el("span", {}, `Updated ${relativeDate(project.updated_at)}`)),
+      el("span", {}, `Updated ${relativeDate(project.updated_at)}`),
+      installButton(project)),
   );
+}
+
+function installButton(project) {
+  if (project.project_type !== "mod") return null;
+  const button = el("button", { class: "primary compact install" }, "Install");
+  button.disabled = !$("target-server").value || project.server_side === "unsupported";
+  if (project.server_side === "unsupported") button.title = "Client-only mods cannot run on a server";
+  button.addEventListener("click", () => installMod(project, button));
+  return button;
+}
+
+async function installMod(project, button) {
+  const serverId = $("target-server").value;
+  if (!serverId) return;
+  button.disabled = true;
+  button.textContent = "Installing…";
+  try {
+    const outcome = await api(`/api/servers/${encodeURIComponent(serverId)}/mods`, {
+      method: "POST", body: { project_id: project.id },
+    });
+    showOutcome($("notice"), outcome);
+    button.textContent = outcome.installed.length ? "Installed" : "Install";
+    if (!outcome.installed.length) button.disabled = false;
+  } catch (error) {
+    $("notice").replaceChildren(el("p", { class: "error" }, `${project.title}: ${error.message}`));
+    $("notice").hidden = false;
+    button.textContent = "Install";
+    button.disabled = false;
+  }
+}
+
+async function loadTargetServers() {
+  try {
+    const servers = await api("/api/servers");
+    $("target-server").append(...servers.map((s) => el("option", { value: s.server_id }, s.server_name)));
+    try {
+      const saved = localStorage.getItem("targetServer");
+      if (saved && servers.some((s) => s.server_id === saved)) $("target-server").value = saved;
+    } catch { /* storage unavailable */ }
+  } catch {
+    $("target-server").disabled = true;
+  }
 }
 
 function setStatus(message, isError = false) {
@@ -182,6 +225,11 @@ function bindEvents() {
   $("prev").addEventListener("click", () => { state.page -= 1; search(); window.scrollTo(0, 0); });
   $("next").addEventListener("click", () => { state.page += 1; search(); window.scrollTo(0, 0); });
 
+  $("target-server").addEventListener("change", (event) => {
+    try { localStorage.setItem("targetServer", event.target.value); } catch { /* ignore */ }
+    search();
+  });
+
   $("toggle-filters").addEventListener("click", (event) => {
     const open = $("filters").classList.toggle("is-open");
     event.currentTarget.setAttribute("aria-expanded", String(open));
@@ -190,4 +238,4 @@ function bindEvents() {
 
 bindEvents();
 loadFilters();
-search();
+loadTargetServers().then(search);

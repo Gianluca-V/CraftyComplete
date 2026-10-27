@@ -233,7 +233,7 @@ def test_scan_accepts_loader_and_version_overrides(world, db):
     assert response.json()["loader"] == "quilt"
     assert response.json()["game_version"] == "1.20"
     update = json.loads(world.modrinth_calls("/v2/version_files/update")[0].content)
-    assert update["loaders"] == ["quilt"]
+    assert update["loaders"] == ["quilt", "fabric"]  # Quilt also loads Fabric mods
     assert update["game_versions"] == ["1.20"]
 
 
@@ -305,7 +305,7 @@ def test_unadopted_server_reports_no_mods(world, db):
 
     assert response.status_code == 200
     assert response.json() == {"server_id": SERVER, "adopted": False, "loader": None,
-                               "game_version": None, "scanned_at": None, "mods": [],
+                               "game_version": None, "scanned_at": None, "updates_checked_at": None, "mods": [],
                                "counts": {"identified": 0, "unknown": 0, "updates": 0,
                                           "pinned": 0}}
 

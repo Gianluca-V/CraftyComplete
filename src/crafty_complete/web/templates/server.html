@@ -25,11 +25,15 @@
         <option value="">Detect</option>
       </select>
     </label>
-    <button id="scan" class="primary compact">Adopt server</button>
+    <button id="scan" class="ghost">Adopt server</button>
+    <span class="toolbar-spacer"></span>
+    <button id="check-updates" class="ghost" hidden>Check for updates</button>
+    <button id="update-all" class="primary compact" hidden disabled>Update all</button>
   </section>
 
   <div id="summary" class="summary" hidden></div>
   <p id="status" class="status" role="status" aria-live="polite"></p>
+  <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
 
   <div class="table-wrap">
     <table id="mod-table" class="mod-table" hidden>

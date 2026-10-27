@@ -2,12 +2,14 @@ import json
 import re
 import time
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
 from crafty_complete.catalog.models import (
     SERVER_LOADERS,
     CatalogError,
+    CatalogNotFound,
     CatalogFilters,
     CatalogProject,
     ProjectType,
@@ -20,6 +22,8 @@ TAG_CACHE_SECONDS = 3600
 RELEASE_VERSION = re.compile(r"^\d+\.\d+(\.\d+)?$")
 HASH_BATCH = 200
 PROJECT_BATCH = 100
+MODRINTH_CDN = "https://cdn.modrinth.com/"
+MAX_DOWNLOAD_BYTES = 256 * 1024 * 1024
 
 
 def _chunks(items: list[str], size: int) -> list[list[str]]:
@@ -82,9 +86,42 @@ class ModrinthProvider:
             response = await self._http.get(path, params=params)
         except httpx.HTTPError as exc:
             raise CatalogError(f"Modrinth request failed: {exc}") from exc
+        if response.status_code == 404:
+            raise CatalogNotFound(f"Modrinth has no {path}")
         if response.status_code >= 400:
             raise CatalogError(f"Modrinth request failed: HTTP {response.status_code}")
         return response.json()
+
+    async def project(self, ref: str) -> dict[str, Any]:
+        """A project by id or slug."""
+        return await self._get(f"project/{quote(ref, safe='')}")
+
+    async def version(self, version_id: str) -> dict[str, Any]:
+        return await self._get(f"version/{quote(version_id, safe='')}")
+
+    async def compatible_versions(self, project_id: str, loaders: list[str],
+                                  game_version: str) -> list[dict[str, Any]]:
+        """Versions of a project for these loaders and Minecraft version, newest first."""
+        return await self._get(f"project/{quote(project_id, safe='')}/version", params={
+            "loaders": json.dumps(loaders), "game_versions": json.dumps([game_version]),
+        })
+
+    async def download(self, url: str, max_bytes: int = MAX_DOWNLOAD_BYTES) -> bytes:
+        """Download a file Modrinth hosts. Only its CDN is trusted."""
+        if not url.startswith(MODRINTH_CDN):
+            raise CatalogError(f"Refusing to download from outside Modrinth: {url}")
+        data = bytearray()
+        try:
+            async with self._http.stream("GET", url, follow_redirects=False) as response:
+                if response.status_code >= 400:
+                    raise CatalogError(f"Modrinth download failed: HTTP {response.status_code}")
+                async for chunk in response.aiter_bytes():
+                    data.extend(chunk)
+                    if len(data) > max_bytes:
+                        raise CatalogError(f"{url} is larger than {max_bytes} bytes")
+        except httpx.HTTPError as exc:
+            raise CatalogError(f"Modrinth download failed: {exc}") from exc
+        return bytes(data)
 
     async def _post(self, path: str, body: dict[str, Any]) -> Any:
         try:
@@ -104,14 +141,14 @@ class ModrinthProvider:
             )
         return found
 
-    async def latest_versions(self, hashes: list[str], loader: str,
+    async def latest_versions(self, hashes: list[str], loaders: list[str],
                               game_version: str) -> dict[str, dict[str, Any]]:
-        """Newest version compatible with loader + game version, keyed by the current SHA-1."""
+        """Newest version compatible with loaders + game version, keyed by the current SHA-1."""
         latest: dict[str, dict[str, Any]] = {}
         for batch in _chunks(hashes, HASH_BATCH):
             latest.update(await self._post("version_files/update", {
                 "hashes": batch, "algorithm": "sha1",
-                "loaders": [loader], "game_versions": [game_version],
+                "loaders": loaders, "game_versions": [game_version],
             }))
         return latest
 

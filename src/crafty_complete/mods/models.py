@@ -41,6 +41,7 @@ class AdoptedServer:
     loader: str | None = None
     game_version: str | None = None
     scanned_at: str | None = None
+    updates_checked_at: str | None = None
     mods: list[InstalledMod] = field(default_factory=list)
 
     @property
@@ -55,6 +56,7 @@ class AdoptedServer:
             "loader": self.loader,
             "game_version": self.game_version,
             "scanned_at": self.scanned_at,
+            "updates_checked_at": self.updates_checked_at,
             "mods": [mod.to_dict() for mod in mods],
             "counts": {
                 "identified": sum(mod.state == "identified" for mod in mods),

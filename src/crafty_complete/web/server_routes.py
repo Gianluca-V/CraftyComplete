@@ -7,6 +7,7 @@ from crafty_complete.auth.sessions import Session
 from crafty_complete.catalog.models import CatalogError, Loader
 from crafty_complete.crafty.client import CraftyError
 from crafty_complete.mods.adoption import AdoptionService, NoModsFolder
+from crafty_complete.mods.installer import ModOperationError
 from crafty_complete.web.deps import crafty_failure, require_crafty, require_session
 
 router = APIRouter(prefix="/api/servers")
@@ -90,3 +91,79 @@ async def pin(
     if mod is None:
         raise HTTPException(status_code=404, detail="No adopted mod with that file name.")
     return mod.to_dict()
+
+
+class InstallRequest(BaseModel):
+    # A Modrinth project id or slug.
+    project_id: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,64}$")
+
+
+def require_json(request: Request) -> None:
+    """Endpoints without a body still demand JSON, which cross-site forms cannot send."""
+    content_type = request.headers.get("content-type", "").split(";")[0].strip()
+    if content_type != "application/json":
+        raise HTTPException(status_code=415, detail="Send this request as JSON.")
+
+
+async def _run(request: Request, session: Session, operation) -> dict:
+    """Run an installer operation and translate its failures into HTTP errors."""
+    require_crafty(request)
+    try:
+        return await operation(request.app.state.installer)
+    except ModOperationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except CraftyError as exc:
+        raise _fail(request, session, exc) from exc
+    except CatalogError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/{server_id}/mods")
+async def install(
+    server_id: ServerId,
+    body: InstallRequest,
+    request: Request,
+    session: Session = Depends(require_session),
+) -> dict:
+    """Install a Modrinth mod and its missing required dependencies."""
+    return await _run(request, session, lambda installer: installer.install(
+        session.crafty_token, server_id, body.project_id))
+
+
+@router.post("/{server_id}/mods/{file_name}/update", dependencies=[Depends(require_json)])
+async def update(
+    server_id: ServerId,
+    file_name: str,
+    request: Request,
+    session: Session = Depends(require_session),
+) -> dict:
+    return await _run(request, session, lambda installer: installer.update(
+        session.crafty_token, server_id, file_name))
+
+
+@router.post("/{server_id}/update-all", dependencies=[Depends(require_json)])
+async def update_all(
+    server_id: ServerId,
+    request: Request,
+    session: Session = Depends(require_session),
+) -> dict:
+    return await _run(request, session, lambda installer: installer.update_all(
+        session.crafty_token, server_id))
+
+
+@router.post("/{server_id}/check-updates", dependencies=[Depends(require_json)])
+async def check_updates(
+    server_id: ServerId,
+    request: Request,
+    session: Session = Depends(require_session),
+) -> dict:
+    """Refresh "update available" now. Installs nothing."""
+    adoption = _adoption(request)
+    try:
+        await adoption.ensure_file_access(session.crafty_token, server_id)
+        server = await adoption.check_updates(server_id)
+    except CraftyError as exc:
+        raise _fail(request, session, exc) from exc
+    except CatalogError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return server.to_dict()
