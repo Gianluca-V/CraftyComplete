@@ -89,7 +89,8 @@ function render(data) {
   const detected = [data.loader, data.game_version].filter(Boolean).join(" ");
   $("scan-info").textContent =
     `${detected || "Loader and version unknown"} · scanned ${relativeDate(data.scanned_at)}` +
-    (data.updates_checked_at ? ` · updates checked ${relativeDate(data.updates_checked_at)}` : "");
+    (data.updates_checked_at ? ` · updates checked ${relativeDate(data.updates_checked_at)}` : "") +
+    (data.modpack ? ` · from ${data.modpack.title} ${data.modpack.version_number}` : "");
   const c = data.counts;
   $("summary").replaceChildren(
     el("span", {}, el("strong", {}, String(c.identified)), " identified"),

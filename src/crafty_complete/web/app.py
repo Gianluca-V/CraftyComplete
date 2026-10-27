@@ -22,6 +22,10 @@ from crafty_complete.mods.installer import ModInstaller
 from crafty_complete.mods.locks import ServerLocks
 from crafty_complete.mods.store import AdoptionStore
 from crafty_complete.mods.update_checker import UpdateChecker
+from crafty_complete.modpacks.creator import ModpackServerCreator
+from crafty_complete.modpacks.jobs import JobRegistry
+from crafty_complete.web.modpack_routes import ProjectRef
+from crafty_complete.web.modpack_routes import router as modpack_router
 from crafty_complete.web.deps import current_session, require_session
 from crafty_complete.web.server_routes import ServerId
 from crafty_complete.web.server_routes import router as server_router
@@ -70,8 +74,12 @@ def create_app(
             app.state.crafty, app.state.catalog, store, adoption, locks)
         checker = app.state.update_checker = UpdateChecker(
             adoption, store, settings.update_check_hours)
+        app.state.modpack_creator = ModpackServerCreator(
+            app.state.crafty, app.state.catalog, adoption, locks, settings)
+        app.state.jobs = JobRegistry()
         checker.start()
         yield
+        await app.state.jobs.shutdown()
         await checker.stop()
         store.close()
         await modrinth_http.aclose()
@@ -92,6 +100,7 @@ def create_app(
     app.include_router(auth_router)
     app.include_router(catalog_router, dependencies=[Depends(require_session)])
     app.include_router(server_router)
+    app.include_router(modpack_router)
 
     def page(request: Request, template: str, **context):
         session = current_session(request)
@@ -109,6 +118,10 @@ def create_app(
     @app.get("/servers", response_class=HTMLResponse)
     async def servers_page(request: Request):
         return page(request, "servers.html", active="servers")
+
+    @app.get("/modpacks/{project_ref}/create", response_class=HTMLResponse)
+    async def create_from_modpack_page(request: Request, project_ref: ProjectRef):
+        return page(request, "modpack_create.html", active="browse", project_ref=project_ref)
 
     @app.get("/servers/{server_id}", response_class=HTMLResponse)
     async def server_page(request: Request, server_id: ServerId):

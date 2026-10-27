@@ -1,6 +1,7 @@
 import hashlib
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
 
@@ -194,6 +195,55 @@ class CraftyClient:
         body = _json(response)
         if response.status_code != 200 or body.get("status") != "completed":
             self._raise_for(response, body)
+
+    async def upload_path(self, token: str, server_id: str, location: str, file_name: str,
+                          source: Path, chunk_bytes: int) -> None:
+        """Upload a file from disk, in Crafty's chunked protocol when it is large.
+
+        Crafty (Tornado) rejects request bodies over 100 MB, so big jars must be chunked.
+        """
+        size = source.stat().st_size
+        if size <= chunk_bytes:
+            await self.upload_file(token, server_id, location, file_name, source.read_bytes())
+            return
+        url = f"/api/v2/servers/{server_id}/files/upload"
+        total = (size + chunk_bytes - 1) // chunk_bytes
+        base = {
+            "Authorization": f"Bearer {token}", "chunked": "true", "fileSize": str(size),
+            "totalChunks": str(total), "fileName": file_name, "location": location,
+            "fileId": uuid.uuid4().hex,
+        }
+        try:
+            response = await self._http.post(url, headers=base)  # announce the upload
+            if response.status_code != 200:
+                self._raise_for(response, _json(response))
+            with source.open("rb") as handle:
+                for index in range(total):
+                    chunk = handle.read(chunk_bytes)
+                    response = await self._http.post(url, content=chunk, headers={
+                        **base, "chunkId": str(index),
+                        "chunkHash": hashlib.sha256(chunk).hexdigest(),
+                    })
+                    body = _json(response)
+                    expected = "completed" if index == total - 1 else "partial"
+                    if response.status_code != 200 or body.get("status") != expected:
+                        self._raise_for(response, body)
+        except httpx.HTTPError as exc:
+            raise CraftyError("unreachable", str(exc)) from exc
+
+    async def jar_catalog(self, token: str) -> dict[str, Any]:
+        """Crafty's server jar catalog ("big bucket"): categories -> types -> versions."""
+        return await self._get("/api/v2/crafty/JarCache", token) or {}
+
+    async def create_server(self, token: str, payload: dict[str, Any]) -> str:
+        data = await self._request("POST", "/api/v2/servers", token, json=payload)
+        return str(data["new_server_id"])
+
+    async def get_server(self, token: str, server_id: str) -> dict[str, Any]:
+        return await self._get(f"/api/v2/servers/{server_id}", token)
+
+    async def server_stats(self, token: str, server_id: str) -> dict[str, Any]:
+        return await self._get(f"/api/v2/servers/{server_id}/stats", token) or {}
 
     async def delete_file(self, token: str, server_id: str, path: str) -> None:
         await self._request(

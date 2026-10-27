@@ -51,3 +51,22 @@ def test_reopening_a_current_database_changes_nothing(tmp_path):
     store = AdoptionStore(path)
     assert store.server_ids() == []
     store.close()
+
+
+def test_version_2_database_gains_the_modpack_link(tmp_path):
+    path = tmp_path / "v2.sqlite3"
+    db = sqlite3.connect(path)
+    db.executescript(V1_SCHEMA.replace("PRAGMA user_version = 1;", ""))
+    db.execute("ALTER TABLE adopted_servers ADD COLUMN updates_checked_at TEXT")
+    db.execute("PRAGMA user_version = 2")
+    db.execute("INSERT INTO adopted_servers VALUES ('abc', 'forge', '1.20.1', 't0', 't1')")
+    db.commit()
+    db.close()
+
+    store = AdoptionStore(str(path))
+    server = store.get("abc")
+    store.close()
+
+    assert server.updates_checked_at == "t1"
+    assert server.modpack_project_id is None
+    assert server.to_dict()["modpack"] is None

@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     # How often to look for mod updates in the background (0 disables it). Never installs.
     update_check_hours: float = 6
 
+    # Where modpacks are downloaded while a server is built (default: the system temp dir).
+    modpack_work_dir: str | None = None
+    # How long to wait for Crafty to install a server's loader, and how often to ask.
+    modpack_install_timeout_minutes: float = 20
+    modpack_poll_seconds: float = 5
+    # Files above this size are uploaded to Crafty in chunks (its request limit is 100 MB).
+    upload_chunk_bytes: int = 10 * 1024 * 1024
+
     session_idle_minutes: float = 60
     session_max_hours: float = 12
     # None: mark the cookie Secure only when the request arrived over HTTPS.

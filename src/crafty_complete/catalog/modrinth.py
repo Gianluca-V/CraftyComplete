@@ -1,6 +1,8 @@
+import hashlib
 import json
 import re
 import time
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -105,6 +107,35 @@ class ModrinthProvider:
         return await self._get(f"project/{quote(project_id, safe='')}/version", params={
             "loaders": json.dumps(loaders), "game_versions": json.dumps([game_version]),
         })
+
+    async def project_versions(self, project_id: str) -> list[dict[str, Any]]:
+        """Every version of a project, newest first."""
+        return await self._get(f"project/{quote(project_id, safe='')}/version")
+
+    async def download_to_file(self, url: str, destination: Path,
+                               max_bytes: int) -> tuple[str, str]:
+        """Stream `url` to `destination`; returns its (SHA-1, SHA-512) for the caller to check.
+
+        Redirects are followed (GitHub release assets redirect to a storage host), so
+        callers must verify the hashes against a trusted source.
+        """
+        sha1, sha512, size = hashlib.sha1(), hashlib.sha512(), 0
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            async with self._http.stream("GET", url, follow_redirects=True) as response:
+                if response.status_code >= 400:
+                    raise CatalogError(f"Download failed: HTTP {response.status_code} for {url}")
+                with destination.open("wb") as handle:
+                    async for chunk in response.aiter_bytes():
+                        size += len(chunk)
+                        if size > max_bytes:
+                            raise CatalogError(f"{url} is larger than {max_bytes} bytes")
+                        sha1.update(chunk)
+                        sha512.update(chunk)
+                        handle.write(chunk)
+        except httpx.HTTPError as exc:
+            raise CatalogError(f"Download failed: {exc}") from exc
+        return sha1.hexdigest(), sha512.hexdigest()
 
     async def download(self, url: str, max_bytes: int = MAX_DOWNLOAD_BYTES) -> bytes:
         """Download a file Modrinth hosts. Only its CDN is trusted."""

@@ -53,6 +53,12 @@ function renderCard(project) {
 }
 
 function installButton(project) {
+  if (project.project_type === "modpack") {
+    return el("a", {
+      class: "primary compact install link-button",
+      href: `/modpacks/${encodeURIComponent(project.slug)}/create`,
+    }, "Create server");
+  }
   if (project.project_type !== "mod") return null;
   const button = el("button", { class: "primary compact install" }, "Install");
   button.disabled = !$("target-server").value || project.server_side === "unsupported";

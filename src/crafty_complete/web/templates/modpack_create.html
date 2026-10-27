@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Create server{% endblock %}
+{% block content %}
+<main class="page" id="create-page" data-project="{{ project_ref }}">
+  <a class="back" href="/">‹ Browse</a>
+  <div class="page-head">
+    <h1 id="pack-title">Create a server from a modpack</h1>
+    <p class="muted">Crafty installs the loader; craftyComplete downloads the pack, checks every
+      file against its hash and copies the server files in.</p>
+  </div>
+
+  <form id="create-form" class="create-form" novalidate>
+    <label class="field">
+      Modpack version
+      <select name="version_id" id="version" required></select>
+    </label>
+    <label class="field">
+      Server name
+      <input name="name" id="server-name" required minlength="2" maxlength="64">
+    </label>
+    <div class="field-row">
+      <label class="field">
+        Port
+        <input name="port" type="number" min="1" max="65535" value="25565" required>
+      </label>
+      <label class="field">
+        Min memory (GB)
+        <input name="mem_min" type="number" min="0.5" step="0.5" value="2" required>
+      </label>
+      <label class="field">
+        Max memory (GB)
+        <input name="mem_max" type="number" min="0.5" step="0.5" value="6" required>
+      </label>
+    </div>
+    <label class="check">
+      <input type="checkbox" name="agree_to_eula">
+      I accept the <a href="https://aka.ms/MinecraftEULA" target="_blank" rel="noopener">Minecraft EULA</a>
+    </label>
+    <p id="form-error" class="status is-error" role="alert"></p>
+    <button type="submit" class="primary compact" id="create">Create server</button>
+  </form>
+
+  <section id="job" class="job" hidden aria-live="polite">
+    <h2 id="job-title"></h2>
+    <p id="job-step" class="job-step"></p>
+    <progress id="job-progress" max="1" value="0"></progress>
+    <ul id="job-warnings" class="job-warnings"></ul>
+    <p id="job-error" class="status is-error"></p>
+    <a id="job-link" class="primary compact link-button" hidden>Open the server</a>
+  </section>
+</main>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', path='modpack_create.js') }}"></script>
+{% endblock %}

@@ -305,7 +305,7 @@ def test_unadopted_server_reports_no_mods(world, db):
 
     assert response.status_code == 200
     assert response.json() == {"server_id": SERVER, "adopted": False, "loader": None,
-                               "game_version": None, "scanned_at": None, "updates_checked_at": None, "mods": [],
+                               "game_version": None, "scanned_at": None, "updates_checked_at": None, "modpack": None, "mods": [],
                                "counts": {"identified": 0, "unknown": 0, "updates": 0,
                                           "pinned": 0}}
 

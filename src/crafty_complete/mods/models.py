@@ -42,6 +42,10 @@ class AdoptedServer:
     game_version: str | None = None
     scanned_at: str | None = None
     updates_checked_at: str | None = None
+    modpack_project_id: str | None = None
+    modpack_title: str | None = None
+    modpack_version_id: str | None = None
+    modpack_version_number: str | None = None
     mods: list[InstalledMod] = field(default_factory=list)
 
     @property
@@ -57,6 +61,12 @@ class AdoptedServer:
             "game_version": self.game_version,
             "scanned_at": self.scanned_at,
             "updates_checked_at": self.updates_checked_at,
+            "modpack": {
+                "project_id": self.modpack_project_id,
+                "title": self.modpack_title,
+                "version_id": self.modpack_version_id,
+                "version_number": self.modpack_version_number,
+            } if self.modpack_project_id else None,
             "mods": [mod.to_dict() for mod in mods],
             "counts": {
                 "identified": sum(mod.state == "identified" for mod in mods),

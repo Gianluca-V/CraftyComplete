@@ -98,9 +98,19 @@ class AdoptionService:
     async def _scan(self, token: str, server_id: str, loader: str | None,
                     game_version: str | None) -> AdoptedServer:
         await self.ensure_file_access(token, server_id)
-        previous = self._store.get(server_id)
         hashes = await self._hash_jars(token, server_id)
+        return await self.record(server_id, hashes, loader, game_version)
 
+    async def record(self, server_id: str, hashes: dict[str, str], loader: str | None = None,
+                     game_version: str | None = None,
+                     modpack: dict[str, str] | None = None) -> AdoptedServer:
+        """Identify jars (file name -> SHA-1) on Modrinth and save them as the server's mods.
+
+        Loader and Minecraft version: the given ones, else the stored ones, else inferred.
+        Pins and the modpack link are kept unless a new `modpack` is given. Callers hold
+        the server lock.
+        """
+        previous = self._store.get(server_id)
         versions = await self._modrinth.versions_by_sha1(sorted(set(hashes.values())))
         identified = list(versions.values())
         projects = await self._modrinth.projects(
@@ -144,6 +154,11 @@ class AdoptionService:
             mod.pinned = mod.pin_key in pinned
             mods.append(mod)
 
+        link = modpack or {
+            "project_id": previous.modpack_project_id, "title": previous.modpack_title,
+            "version_id": previous.modpack_version_id,
+            "version_number": previous.modpack_version_number,
+        }
         now = utc_now()
         server = AdoptedServer(
             server_id=server_id,
@@ -151,6 +166,10 @@ class AdoptionService:
             game_version=game_version,
             scanned_at=now,
             updates_checked_at=now if checked else previous.updates_checked_at,
+            modpack_project_id=link["project_id"],
+            modpack_title=link["title"],
+            modpack_version_id=link["version_id"],
+            modpack_version_number=link["version_number"],
             mods=mods,
         )
         self._store.save(server)

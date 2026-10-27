@@ -5,7 +5,7 @@ from pathlib import Path
 
 from crafty_complete.mods.models import AdoptedServer, InstalledMod
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS adopted_servers (
@@ -13,7 +13,12 @@ CREATE TABLE IF NOT EXISTS adopted_servers (
     loader             TEXT,
     game_version       TEXT,
     scanned_at         TEXT NOT NULL,
-    updates_checked_at TEXT
+    updates_checked_at TEXT,
+    -- The Modrinth modpack version the server was created from, if any.
+    modpack_project_id     TEXT,
+    modpack_title          TEXT,
+    modpack_version_id     TEXT,
+    modpack_version_number TEXT
 );
 CREATE TABLE IF NOT EXISTS server_mods (
     server_id             TEXT NOT NULL REFERENCES adopted_servers(server_id) ON DELETE CASCADE,
@@ -36,8 +41,14 @@ CREATE TABLE IF NOT EXISTS server_mods (
 
 # Applied in order to databases created by older versions (index = version it upgrades from).
 MIGRATIONS = {
-    1: "ALTER TABLE adopted_servers ADD COLUMN updates_checked_at TEXT",
+    1: ["ALTER TABLE adopted_servers ADD COLUMN updates_checked_at TEXT"],
+    2: [f"ALTER TABLE adopted_servers ADD COLUMN {column} TEXT" for column in (
+        "modpack_project_id", "modpack_title", "modpack_version_id", "modpack_version_number")],
 }
+
+SERVER_COLUMNS = ["server_id", "loader", "game_version", "scanned_at", "updates_checked_at",
+                  "modpack_project_id", "modpack_title", "modpack_version_id",
+                  "modpack_version_number"]
 
 MOD_COLUMNS = [f.name for f in fields(InstalledMod)]
 
@@ -65,7 +76,8 @@ class AdoptionStore:
                 # A database that has tables but user_version 0 can only be a v1 file whose
                 # version pragma was never written, so it migrates from 1.
                 for version in range(current or 1, SCHEMA_VERSION):
-                    self._db.execute(MIGRATIONS[version])
+                    for statement in MIGRATIONS[version]:
+                        self._db.execute(statement)
             self._db.executescript(SCHEMA)
             self._db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
@@ -86,25 +98,19 @@ class AdoptionStore:
             mod_rows = self._db.execute(
                 "SELECT * FROM server_mods WHERE server_id = ?", (server_id,)
             ).fetchall()
-        return AdoptedServer(
-            server_id=server_id, loader=row["loader"], game_version=row["game_version"],
-            scanned_at=row["scanned_at"], updates_checked_at=row["updates_checked_at"],
-            mods=[_mod(r) for r in mod_rows],
-        )
+        return AdoptedServer(**{c: row[c] for c in SERVER_COLUMNS},
+                             mods=[_mod(r) for r in mod_rows])
 
     def save(self, server: AdoptedServer) -> None:
         """Replace everything stored for this server in one transaction."""
         with self._lock, self._db:
             self._db.execute("DELETE FROM server_mods WHERE server_id = ?", (server.server_id,))
+            updates = ", ".join(f"{c} = excluded.{c}" for c in SERVER_COLUMNS[1:])
             self._db.execute(
-                "INSERT INTO adopted_servers "
-                "(server_id, loader, game_version, scanned_at, updates_checked_at) "
-                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(server_id) DO UPDATE SET "
-                "loader = excluded.loader, game_version = excluded.game_version, "
-                "scanned_at = excluded.scanned_at, "
-                "updates_checked_at = excluded.updates_checked_at",
-                (server.server_id, server.loader, server.game_version, server.scanned_at,
-                 server.updates_checked_at),
+                f"INSERT INTO adopted_servers ({', '.join(SERVER_COLUMNS)}) "
+                f"VALUES ({', '.join('?' for _ in SERVER_COLUMNS)}) "
+                f"ON CONFLICT(server_id) DO UPDATE SET {updates}",
+                tuple(getattr(server, c) for c in SERVER_COLUMNS),
             )
             self._insert_mods(server.server_id, server.mods)
 
