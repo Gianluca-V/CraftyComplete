@@ -1,3 +1,4 @@
+import dataclasses
 import hashlib
 import json
 
@@ -92,7 +93,7 @@ ALL_VERSIONS = [
 VERSIONS_BY_ID = {v["id"]: v for v in ALL_VERSIONS}
 
 
-class Store(World):
+class FakeServices(World):
     """World plus Crafty uploads/deletes and Modrinth projects, versions and CDN."""
 
     def __init__(self, **kwargs):
@@ -172,8 +173,8 @@ class Store(World):
 
 
 @pytest.fixture
-def store():
-    return Store()
+def fakes():
+    return FakeServices()
 
 
 @pytest.fixture
@@ -184,7 +185,7 @@ def db(tmp_path):
 class Session:
     """Logged-in client on an adopted server."""
 
-    def __init__(self, world: Store, db: str, adopt=True, **settings):
+    def __init__(self, world: FakeServices, db: str, adopt=True, **settings):
         settings.setdefault("update_check_hours", 0)
         self.client = make_client(world, crafty_url=CRAFTY, database_path=db, **settings)
         self.client.__enter__()
@@ -204,8 +205,8 @@ class Session:
 
 
 @pytest.fixture
-def session(store, db):
-    s = Session(store, db)
+def session(fakes, db):
+    s = Session(fakes, db)
     yield s
     s.close()
 
@@ -216,7 +217,7 @@ def install(session, project_id):
 
 # --- install ------------------------------------------------------------------
 
-def test_install_adds_mod_and_missing_required_dependencies(session, store):
+def test_install_adds_mod_and_missing_required_dependencies(session, fakes):
     response = install(session, "P3")
 
     assert response.status_code == 200
@@ -229,8 +230,8 @@ def test_install_adds_mod_and_missing_required_dependencies(session, store):
     ]
     assert body["skipped"] == []
     assert body["restart_required"] is True
-    assert store.files["mods/lithium-0.11.2.jar"] == BYTES["li-2"]
-    assert store.files["mods/cloth-config-11.1.jar"] == BYTES["cl-1"]
+    assert fakes.files["mods/lithium-0.11.2.jar"] == BYTES["li-2"]
+    assert fakes.files["mods/cloth-config-11.1.jar"] == BYTES["cl-1"]
 
     mods = by_file(body["server"])
     assert mods["lithium-0.11.2.jar"]["state"] == "identified"
@@ -241,80 +242,80 @@ def test_install_adds_mod_and_missing_required_dependencies(session, store):
     assert session.mods().keys() == mods.keys()
 
 
-def test_install_uploads_through_crafty_with_crafty_headers(session, store):
+def test_install_uploads_through_crafty_with_crafty_headers(session, fakes):
     install(session, "P4")
 
-    upload = store.uploads()[0]
+    upload = fakes.uploads()[0]
     assert upload.headers["Authorization"] == "Bearer user-jwt"
     assert upload.headers["location"] == "mods"
     assert upload.headers["fileName"] == "cloth-config-11.1.jar"
 
 
-def test_install_picks_newest_release_for_the_servers_loader_and_version(session, store):
+def test_install_picks_newest_release_for_the_servers_loader_and_version(session, fakes):
     body = install(session, "P3").json()
 
     assert body["installed"][0]["version_number"] == "0.11.2"
-    query = [r for r in store.requests if r.url.path == "/v2/project/P3/version"][0]
+    query = [r for r in fakes.requests if r.url.path == "/v2/project/P3/version"][0]
     assert json.loads(query.url.params["loaders"]) == ["fabric"]
     assert json.loads(query.url.params["game_versions"]) == ["1.20.1"]
 
 
-def test_install_accepts_project_slug(session, store):
+def test_install_accepts_project_slug(session, fakes):
     assert install(session, "cloth-config").json()["installed"][0]["project_id"] == "P4"
 
 
-def test_quilt_server_can_install_fabric_mods(store, db):
-    s = Session(store, db, adopt=False)
+def test_quilt_server_can_install_fabric_mods(fakes, db):
+    s = Session(fakes, db, adopt=False)
     s.post(f"/api/servers/{SERVER}/scan", {"loader": "quilt", "game_version": "1.20.1"})
-    store.requests.clear()
+    fakes.requests.clear()
     response = install(s, "PB")
-    query = [r for r in store.requests if r.url.path == "/v2/project/PB/version"][0]
+    query = [r for r in fakes.requests if r.url.path == "/v2/project/PB/version"][0]
     s.close()
 
     assert response.status_code == 200
     assert json.loads(query.url.params["loaders"]) == ["quilt", "fabric"]
 
 
-def test_install_rejects_client_only_mod(session, store):
+def test_install_rejects_client_only_mod(session, fakes):
     response = install(session, "P6")
 
     assert response.status_code == 422
     assert response.json() == {
         "detail": "Zoomify only runs on clients; it cannot be installed on a server."
     }
-    assert store.uploads() == []
+    assert fakes.uploads() == []
 
 
-def test_install_rejects_modpacks(session, store):
+def test_install_rejects_modpacks(session, fakes):
     response = install(session, "PM")
 
     assert response.status_code == 422
     assert response.json() == {"detail": "A Pack is a modpack, not a mod."}
 
 
-def test_install_reports_no_compatible_version(session, store):
+def test_install_reports_no_compatible_version(session, fakes):
     response = install(session, "P7")
 
     assert response.status_code == 422
     assert response.json() == {"detail": "Forge Only has no version for fabric 1.20.1."}
 
 
-def test_install_rejects_already_installed_project(session, store):
+def test_install_rejects_already_installed_project(session, fakes):
     response = install(session, "P1")
 
     assert response.status_code == 409
     assert response.json() == {"detail": "Fabric API is already installed (fabric-api.jar)."}
 
 
-def test_install_refuses_mods_incompatible_with_installed_ones(session, store):
+def test_install_refuses_mods_incompatible_with_installed_ones(session, fakes):
     response = install(session, "P9")
 
     assert response.status_code == 409
     assert response.json() == {"detail": "Breaks Sodium is incompatible with Sodium."}
-    assert store.uploads() == []
+    assert fakes.uploads() == []
 
 
-def test_install_skips_files_not_hosted_by_modrinth(session, store):
+def test_install_skips_files_not_hosted_by_modrinth(session, fakes):
     response = install(session, "P8")
 
     assert response.status_code == 200
@@ -324,10 +325,10 @@ def test_install_skips_files_not_hosted_by_modrinth(session, store):
         "reason": "Not hosted on Modrinth; download it yourself and upload it to mods/.",
         "url": "https://example.com/external-1.0.jar",
     }]
-    assert store.uploads() == []
+    assert fakes.uploads() == []
 
 
-def test_install_skips_client_only_dependency(session, store):
+def test_install_skips_client_only_dependency(session, fakes):
     body = install(session, "PA").json()
 
     assert [m["project_id"] for m in body["installed"]] == ["PA"]
@@ -337,31 +338,31 @@ def test_install_skips_client_only_dependency(session, store):
     }]
 
 
-def test_install_rejects_download_with_wrong_hash(session, store):
-    store.cdn_override["cl-1"] = b"tampered"
+def test_install_rejects_download_with_wrong_hash(session, fakes):
+    fakes.cdn_override["cl-1"] = b"tampered"
     response = install(session, "P4")
 
     assert response.status_code == 502
     assert response.json() == {
         "detail": "cloth-config-11.1.jar from Modrinth does not match its published hash."
     }
-    assert store.uploads() == []
+    assert fakes.uploads() == []
     assert "cloth-config-11.1.jar" not in session.mods()
 
 
-def test_install_refuses_to_overwrite_a_different_file(store, db):
-    store.files["mods/cloth-config-11.1.jar"] = b"someone else's jar"
-    s = Session(store, db)
+def test_install_refuses_to_overwrite_a_different_file(fakes, db):
+    fakes.files["mods/cloth-config-11.1.jar"] = b"someone else's jar"
+    s = Session(fakes, db)
     response = install(s, "P4")
     s.close()
 
     assert response.status_code == 409
-    assert response.json() == {"detail": "mods/cloth-config-11.1.jar already exists."}
-    assert store.files["mods/cloth-config-11.1.jar"] == b"someone else's jar"
+    assert response.json()["detail"].startswith("mods/cloth-config-11.1.jar already exists.")
+    assert fakes.files["mods/cloth-config-11.1.jar"] == b"someone else's jar"
 
 
-def test_install_requires_adoption(store, db):
-    s = Session(store, db, adopt=False)
+def test_install_requires_adoption(fakes, db):
+    s = Session(fakes, db, adopt=False)
     response = install(s, "P4")
     s.close()
 
@@ -370,15 +371,15 @@ def test_install_requires_adoption(store, db):
 
 
 @pytest.mark.parametrize("project_id", ["", "../x", "a" * 65, "a b"])
-def test_install_validates_project_id(project_id, session, store):
+def test_install_validates_project_id(project_id, session, fakes):
     response = install(session, project_id)
 
     assert response.status_code == 422
-    assert store.requests == []
+    assert fakes.requests == []
 
 
-def test_failed_upload_saves_nothing(session, store):
-    store.upload_error = (500, "OSERROR")
+def test_failed_upload_saves_nothing(session, fakes):
+    fakes.upload_error = (500, "OSERROR")
     response = install(session, "P4")
 
     assert response.status_code == 502
@@ -391,7 +392,7 @@ def update(session, file_name):
     return session.post(f"/api/servers/{SERVER}/mods/{file_name}/update")
 
 
-def test_update_replaces_the_jar(session, store):
+def test_update_replaces_the_jar(session, fakes):
     response = update(session, "fabric-api.jar")
 
     assert response.status_code == 200
@@ -403,8 +404,8 @@ def test_update_replaces_the_jar(session, store):
     }]
     assert body["failed"] == []
     assert body["restart_required"] is True
-    assert store.files["mods/fabric-api-0.92.12.jar"] == BYTES["fa-2"]
-    assert "mods/fabric-api.jar" not in store.files
+    assert fakes.files["mods/fabric-api-0.92.12.jar"] == BYTES["fa-2"]
+    assert "mods/fabric-api.jar" not in fakes.files
 
     mods = by_file(body["server"])
     assert "fabric-api.jar" not in mods
@@ -414,40 +415,40 @@ def test_update_replaces_the_jar(session, store):
     assert body["server"]["counts"]["updates"] == 0
 
 
-def test_update_uploads_before_deleting(session, store):
+def test_update_uploads_before_deleting(session, fakes):
     update(session, "fabric-api.jar")
 
     order = [("upload" if r.url.path.endswith("/upload") else "delete")
-             for r in store.requests
+             for r in fakes.requests
              if r.url.path.endswith("/upload") or r.method == "DELETE"]
     assert order == ["upload", "delete"]
-    assert store.deletes() == [[{"filename": "mods/fabric-api.jar"}]]
+    assert fakes.deletes() == [[{"filename": "mods/fabric-api.jar"}]]
 
 
-def test_update_with_same_file_name_does_not_delete(store, db):
-    store.files["mods/fabric-api-0.92.12.jar"] = store.files.pop("mods/fabric-api.jar")
-    s = Session(store, db)
+def test_update_with_same_file_name_does_not_delete(fakes, db):
+    fakes.files["mods/fabric-api-0.92.12.jar"] = fakes.files.pop("mods/fabric-api.jar")
+    s = Session(fakes, db)
     response = update(s, "fabric-api-0.92.12.jar")
     s.close()
 
     assert response.status_code == 200
-    assert store.deletes() == []
-    assert store.files["mods/fabric-api-0.92.12.jar"] == BYTES["fa-2"]
+    assert fakes.deletes() == []
+    assert fakes.files["mods/fabric-api-0.92.12.jar"] == BYTES["fa-2"]
 
 
-def test_failed_update_keeps_the_old_jar(session, store):
-    store.upload_error = (507, "NO STORAGE SPACE")
+def test_failed_update_keeps_the_old_jar(session, fakes):
+    fakes.upload_error = (507, "NO STORAGE SPACE")
     response = update(session, "fabric-api.jar")
 
     assert response.status_code == 502
-    assert store.files["mods/fabric-api.jar"] == b"fabric-api-0.83.0"
-    assert store.deletes() == []
+    assert fakes.files["mods/fabric-api.jar"] == b"fabric-api-0.83.0"
+    assert fakes.deletes() == []
     assert session.mods()["fabric-api.jar"]["version_id"] == "fa-1"
 
 
-def test_update_whose_old_jar_cannot_be_deleted_records_both_and_can_be_retried(session, store):
+def test_update_whose_old_jar_cannot_be_deleted_records_both_and_can_be_retried(session, fakes):
     """Crafty answers 500 SERVER RUNNING when it cannot unlink a jar (e.g. locked on Windows)."""
-    store.delete_error = (500, "SERVER RUNNING")
+    fakes.delete_error = (500, "SERVER RUNNING")
     response = update(session, "fabric-api.jar")
 
     assert response.status_code == 502
@@ -459,20 +460,20 @@ def test_update_whose_old_jar_cannot_be_deleted_records_both_and_can_be_retried(
     assert mods["fabric-api-0.92.12.jar"]["version_id"] == "fa-2"
     assert mods["fabric-api.jar"]["version_id"] == "fa-1"
 
-    store.delete_error = None
-    uploads_before = len(store.uploads())
+    fakes.delete_error = None
+    uploads_before = len(fakes.uploads())
     retry = update(session, "fabric-api.jar")
 
     assert retry.status_code == 200
-    assert len(store.uploads()) == uploads_before  # the new jar was already there
-    assert "mods/fabric-api.jar" not in store.files
+    assert len(fakes.uploads()) == uploads_before  # the new jar was already there
+    assert "mods/fabric-api.jar" not in fakes.files
     assert "fabric-api.jar" not in session.mods()
 
 
-def test_update_all_reports_an_undeletable_old_jar_and_continues(store, db):
-    store.latest[SODIUM_SHA] = {"id": "so-2", "project_id": "P2", "version_number": "0.6.0"}
-    store.delete_error = (500, "SERVER RUNNING")
-    s = Session(store, db)
+def test_update_all_reports_an_undeletable_old_jar_and_continues(fakes, db):
+    fakes.latest[SODIUM_SHA] = {"id": "so-2", "project_id": "P2", "version_number": "0.6.0"}
+    fakes.delete_error = (500, "SERVER RUNNING")
+    s = Session(fakes, db)
     body = s.post(f"/api/servers/{SERVER}/update-all").json()
     s.close()
 
@@ -480,7 +481,7 @@ def test_update_all_reports_an_undeletable_old_jar_and_continues(store, db):
     assert "could not delete the old fabric-api.jar" in body["failed"][0]["reason"]
 
 
-def test_install_skips_non_ascii_file_names(session, store):
+def test_install_skips_non_ascii_file_names(session, fakes):
     """Crafty takes the file name in an HTTP header, which must be ASCII."""
     original = VERSIONS_BY_ID["cl-1"]["files"][0]["filename"]
     VERSIONS_BY_ID["cl-1"]["files"][0]["filename"] = "clóth-config.jar"
@@ -493,14 +494,14 @@ def test_install_skips_non_ascii_file_names(session, store):
     assert response.json()["installed"] == []
     assert response.json()["skipped"][0]["reason"] == (
         "Its file name cannot be sent to Crafty; download it yourself and upload it to mods/.")
-    assert store.uploads() == []
+    assert fakes.uploads() == []
 
 
-def test_update_all_reports_non_ascii_file_name_and_continues(store, db):
+def test_update_all_reports_non_ascii_file_name_and_continues(fakes, db):
     original = VERSIONS_BY_ID["fa-2"]["files"][0]["filename"]
     VERSIONS_BY_ID["fa-2"]["files"][0]["filename"] = "fabric-apí.jar"
     try:
-        s = Session(store, db)
+        s = Session(fakes, db)
         response = s.post(f"/api/servers/{SERVER}/update-all")
         s.close()
     finally:
@@ -510,9 +511,9 @@ def test_update_all_reports_non_ascii_file_name_and_continues(store, db):
     assert response.json()["failed"][0]["file_name"] == "fabric-api.jar"
 
 
-def test_install_uploads_dependencies_before_the_mod(session, store):
-    store.upload_error = (507, "NO STORAGE SPACE")
-    store.fail_upload_number = 2
+def test_install_uploads_dependencies_before_the_mod(session, fakes):
+    fakes.upload_error = (507, "NO STORAGE SPACE")
+    fakes.fail_upload_number = 2
     response = install(session, "P3")
 
     assert response.status_code == 502
@@ -520,7 +521,7 @@ def test_install_uploads_dependencies_before_the_mod(session, store):
     assert "lithium-0.11.2.jar" not in session.mods()
 
 
-def test_pin_waits_for_a_running_update(session, store):
+def test_pin_waits_for_a_running_update(session, fakes):
     lock = session.client.app.state.installer._locks(SERVER)
     session.client.portal.call(lock.acquire)
     import threading
@@ -544,23 +545,26 @@ def test_pin_waits_for_a_running_update(session, store):
      ("custom.jar", None, 409, "custom.jar is not on Modrinth, so it cannot be updated."),
      ("fabric-api.jar", "pin", 409, "Fabric API is pinned; unpin it to update.")],
 )
-def test_update_refusals(file_name, prepare, status, detail, session, store):
+def test_update_refusals(file_name, prepare, status, detail, session, fakes):
     if prepare == "pin":
         session.client.patch(f"/api/servers/{SERVER}/mods/{file_name}", json={"pinned": True})
     response = update(session, file_name)
 
     assert response.status_code == status
     assert response.json() == {"detail": detail}
-    assert store.uploads() == []
+    assert fakes.uploads() == []
 
 
-def test_update_installs_new_required_dependencies(session, store):
+def test_update_installs_new_required_dependencies(session, fakes):
     install(session, "P3")
     # Pretend the installed Lithium is the older li-1 with li-2 available.
-    session.client.app.state.adoption_store.update_mod(
-        SERVER, "lithium-0.11.2.jar", version_id="li-1", version_number="0.11.1",
-        latest_version_id="li-2", latest_version_number="0.11.2")
-    store.files.pop("mods/cloth-config-11.1.jar")
+    adoption_store = session.client.app.state.adoption_store
+    lithium = next(m for m in adoption_store.get(SERVER).mods
+                   if m.file_name == "lithium-0.11.2.jar")
+    adoption_store.put_mod(SERVER, dataclasses.replace(
+        lithium, version_id="li-1", version_number="0.11.1",
+        latest_version_id="li-2", latest_version_number="0.11.2"))
+    fakes.files.pop("mods/cloth-config-11.1.jar")
     session.client.app.state.adoption_store.remove_mod(SERVER, "cloth-config-11.1.jar")
 
     body = update(session, "lithium-0.11.2.jar").json()
@@ -570,9 +574,9 @@ def test_update_installs_new_required_dependencies(session, store):
 
 # --- update all ---------------------------------------------------------------
 
-def test_update_all_updates_every_unpinned_mod_and_reports_failures(store, db):
-    store.latest[SODIUM_SHA] = {"id": "so-2", "project_id": "P2", "version_number": "0.6.0"}
-    s = Session(store, db)
+def test_update_all_updates_every_unpinned_mod_and_reports_failures(fakes, db):
+    fakes.latest[SODIUM_SHA] = {"id": "so-2", "project_id": "P2", "version_number": "0.6.0"}
+    s = Session(fakes, db)
     response = s.post(f"/api/servers/{SERVER}/update-all")
     s.close()
 
@@ -584,18 +588,18 @@ def test_update_all_updates_every_unpinned_mod_and_reports_failures(store, db):
     assert by_file(body["server"])["sodium.jar"]["version_id"] == "so-1"
 
 
-def test_update_all_skips_pinned_mods(session, store):
+def test_update_all_skips_pinned_mods(session, fakes):
     session.client.patch(f"/api/servers/{SERVER}/mods/fabric-api.jar", json={"pinned": True})
     body = session.post(f"/api/servers/{SERVER}/update-all").json()
 
     assert body["updated"] == []
-    assert store.uploads() == []
+    assert fakes.uploads() == []
 
 
 # --- update checks ------------------------------------------------------------
 
-def test_check_updates_refreshes_latest_versions_without_downloading_jars(session, store):
-    store.latest[SODIUM_SHA] = {"id": "so-2", "project_id": "P2", "version_number": "0.6.0"}
+def test_check_updates_refreshes_latest_versions_without_downloading_jars(session, fakes):
+    fakes.latest[SODIUM_SHA] = {"id": "so-2", "project_id": "P2", "version_number": "0.6.0"}
     response = session.post(f"/api/servers/{SERVER}/check-updates")
 
     assert response.status_code == 200
@@ -604,28 +608,28 @@ def test_check_updates_refreshes_latest_versions_without_downloading_jars(sessio
     assert by_file(body)["sodium.jar"]["latest_version_number"] == "0.6.0"
     assert body["counts"]["updates"] == 2
     assert body["updates_checked_at"]
-    assert store.crafty_calls("/download") == []
+    assert fakes.crafty_calls("/download") == []
 
 
-def test_background_checker_refreshes_every_adopted_server(session, store):
-    store.latest[SODIUM_SHA] = {"id": "so-2", "project_id": "P2", "version_number": "0.6.0"}
+def test_background_checker_refreshes_every_adopted_server(session, fakes):
+    fakes.latest[SODIUM_SHA] = {"id": "so-2", "project_id": "P2", "version_number": "0.6.0"}
     checked = session.client.portal.call(session.client.app.state.update_checker.run_once)
 
     assert checked == 1
     assert session.mods()["sodium.jar"]["update_available"] is True
-    assert [r for r in store.requests if r.url.host == "crafty.local"
+    assert [r for r in fakes.requests if r.url.host == "crafty.local"
             and "permission-check" not in r.url.path] == []
 
 
-def test_update_checker_survives_modrinth_outage(session, store):
-    store.modrinth_down = True
+def test_update_checker_survives_modrinth_outage(session, fakes):
+    fakes.modrinth_down = True
     checked = session.client.portal.call(session.client.app.state.update_checker.run_once)
 
     assert checked == 0
     assert session.mods()["fabric-api.jar"]["latest_version_id"] == "fa-2"
 
 
-def test_update_checker_continues_after_an_unexpected_error(session, store):
+def test_update_checker_continues_after_an_unexpected_error(session, fakes):
     adoption = session.client.app.state.adoption
     store_ = session.client.app.state.adoption_store
     real_ids = store_.server_ids
@@ -655,23 +659,23 @@ def test_scan_reports_when_updates_were_checked(session):
     f"/api/servers/{SERVER}/mods", f"/api/servers/{SERVER}/mods/fabric-api.jar/update",
     f"/api/servers/{SERVER}/update-all", f"/api/servers/{SERVER}/check-updates",
 ])
-def test_mutations_need_files_permission(path, session, store):
-    store.download_error = (400, "NOT_AUTHORIZED")
+def test_mutations_need_files_permission(path, session, fakes):
+    fakes.download_error = (400, "NOT_AUTHORIZED")
     response = session.post(path, {"project_id": "P4"})
 
     assert response.status_code == 403
-    assert store.uploads() == []
+    assert fakes.uploads() == []
 
 
 @pytest.mark.parametrize("path", [
     f"/api/servers/{SERVER}/mods/fabric-api.jar/update",
     f"/api/servers/{SERVER}/update-all", f"/api/servers/{SERVER}/check-updates",
 ])
-def test_bodyless_mutations_require_json(path, session, store):
+def test_bodyless_mutations_require_json(path, session, fakes):
     response = session.client.post(path, data={"x": "1"})
 
     assert response.status_code == 415
-    assert store.uploads() == []
+    assert fakes.uploads() == []
 
 
 def test_server_page_offers_update_all(session):
@@ -685,3 +689,56 @@ def test_browse_page_offers_install_target(session):
     page = session.client.get("/").text
 
     assert 'id="target-server"' in page
+
+
+# --- review follow-ups -------------------------------------------------------
+
+def test_dependency_pinned_to_a_deleted_version_is_skipped(session, fakes):
+    VERSIONS_BY_ID["cd-1"]["dependencies"].append(dep("P4", version_id="gone-1"))
+    try:
+        response = install(session, "PA")
+    finally:
+        VERSIONS_BY_ID["cd-1"]["dependencies"].pop()
+
+    assert response.status_code == 200
+    assert [m["project_id"] for m in response.json()["installed"]] == ["PA"]
+    assert {"project_id": "P4", "title": "Cloth Config", "file_name": None, "url": None,
+            "reason": "Modrinth no longer has the required version gone-1; install it "
+                      "yourself."} in response.json()["skipped"]
+
+
+def test_failed_install_says_what_was_already_installed(session, fakes):
+    fakes.upload_error = (507, "NO STORAGE SPACE")
+    fakes.fail_upload_number = 2
+    response = install(session, "P3")
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": (
+        "Crafty request failed: NO STORAGE SPACE. Already installed before the failure: "
+        "Cloth Config 11.1 (cloth-config-11.1.jar).")}
+
+
+def test_existing_file_conflict_suggests_a_rescan(fakes, db):
+    fakes.files["mods/cloth-config-11.1.jar"] = b"someone else's jar"
+    s = Session(fakes, db)
+    s.client.app.state.adoption_store.remove_mod(SERVER, "cloth-config-11.1.jar")
+    response = install(s, "P4")
+    s.close()
+
+    assert response.json()["detail"] == (
+        "mods/cloth-config-11.1.jar already exists. If an earlier attempt timed out, "
+        "rescan the server and try again.")
+
+
+def test_install_refuses_when_total_download_size_is_too_large(session, fakes, monkeypatch):
+    limit = len(BYTES["li-2"]) + len(BYTES["cl-1"]) - 1
+    monkeypatch.setattr("crafty_complete.mods.installer.MAX_TOTAL_DOWNLOAD_BYTES", limit)
+    response = install(session, "P3")
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": f"This install would download more than {limit} bytes; "
+                  "install the mods one by one."
+    }
+    assert fakes.uploads() == []
+    assert [r for r in fakes.requests if r.url.host == "cdn.modrinth.com"] == []

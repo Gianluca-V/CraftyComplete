@@ -238,4 +238,7 @@ function bindEvents() {
 
 bindEvents();
 loadFilters();
-loadTargetServers().then(search);
+// Search right away; a slow Crafty must not delay Modrinth results. When a saved target
+// server comes back, search again so the Install buttons become active.
+search();
+loadTargetServers().then(() => { if ($("target-server").value) search(); });

@@ -12,6 +12,13 @@ from crafty_complete.mods.store import AdoptionStore
 
 # Safety net against dependency cycles or absurd trees.
 MAX_PLANNED_PROJECTS = 50
+# Planned jars are held in memory until every hash is verified, so bound the batch.
+MAX_TOTAL_DOWNLOAD_BYTES = 512 * 1024 * 1024
+RESCAN_HINT = " If an earlier attempt timed out, rescan the server and try again."
+
+
+def _size(n: int) -> str:
+    return f"{n // (1024 * 1024)} MiB" if n >= 1024 * 1024 else f"{n} bytes"
 
 
 class ModOperationError(Exception):
@@ -148,14 +155,24 @@ class ModInstaller:
             if dep.get("dependency_type") != "required":
                 continue
             dep_version = None
+            missing_version = False
             if dep.get("version_id"):
-                dep_version = await self._modrinth.version(dep["version_id"])
+                try:
+                    dep_version = await self._modrinth.version(dep["version_id"])
+                except CatalogNotFound:
+                    missing_version = True
             project_id = dep.get("project_id") or (dep_version or {}).get("project_id")
             if not project_id or project_id in installed or project_id in planned:
                 continue
             if len(planned) >= MAX_PLANNED_PROJECTS:
                 raise ModOperationError(422, "The dependency tree is too large to install.")
             project = await self._modrinth.project(project_id)
+            if missing_version:
+                outcome.skipped.append(Skipped(
+                    project_id=project["id"], title=project["title"],
+                    reason=f"Modrinth no longer has the required version {dep['version_id']}; "
+                           "install it yourself."))
+                continue
             if project.get("server_side") == "unsupported":
                 outcome.skipped.append(Skipped(
                     project_id=project["id"], title=project["title"],
@@ -212,7 +229,7 @@ class ModInstaller:
                              if m.file_name == name), None)
             if not (recorded and recorded.project_id == project["id"]
                     and recorded.version_id == version["id"]):
-                raise ModOperationError(409, f"{MODS_DIR}/{name} already exists.")
+                raise ModOperationError(409, f"{MODS_DIR}/{name} already exists.{RESCAN_HINT}")
             already_uploaded = True  # left behind by an update whose delete failed
         if not already_uploaded:
             await self._crafty.upload_file(token, server.server_id, MODS_DIR, name, data)
@@ -230,10 +247,11 @@ class ModInstaller:
             latest_version_id=version["id"],
             latest_version_number=version.get("version_number"),
         )
-        same_name = old_name == name
-        self._store.put_mod(server.server_id, mod, replaces=old_name if same_name else None)
+        # Same name: this overwrites the old record. Different name: the old record is only
+        # removed once its jar is gone.
+        self._store.put_mod(server.server_id, mod)
         existing.add(name)
-        if old_name and not same_name:
+        if old_name and old_name != name:
             try:
                 await self._crafty.delete_file(
                     token, server.server_id, f"{MODS_DIR}/{old_name}")
@@ -269,12 +287,26 @@ class ModInstaller:
                     reason=reason))
                 continue
             downloadable.append(item)
+        total = sum(item.file.get("size") or 0 for item in downloadable)
+        if total > MAX_TOTAL_DOWNLOAD_BYTES:
+            raise ModOperationError(422, f"This install would download more than "
+                                         f"{_size(MAX_TOTAL_DOWNLOAD_BYTES)}; install the mods "
+                                         "one by one.")
         payloads = [await self._download(item) for item in downloadable]
 
         existing = {e.name for e in await self._crafty.list_dir(token, server.server_id, MODS_DIR)}
         done = []
         for item, data in zip(downloadable, payloads):
-            await self._write(token, server, item, data, existing)
+            try:
+                await self._write(token, server, item, data, existing)
+            except (CraftyError, ModOperationError) as exc:
+                if not done or (isinstance(exc, CraftyError) and exc.state == "unauthorized"):
+                    raise
+                message = exc.detail if isinstance(exc, ModOperationError) else (
+                    f"Crafty request failed: {exc.message}")
+                already = ", ".join(f"{d.title} {d.version_number} ({d.file_name})" for d in done)
+                raise ModOperationError(
+                    502, f"{message}. Already installed before the failure: {already}.") from exc
             done.append(Installed(
                 project_id=item.project["id"], title=item.project["title"],
                 version_number=item.version.get("version_number"),

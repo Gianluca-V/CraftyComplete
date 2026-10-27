@@ -40,7 +40,6 @@ MIGRATIONS = {
 }
 
 MOD_COLUMNS = [f.name for f in fields(InstalledMod)]
-UPDATABLE_MOD_COLUMNS = set(MOD_COLUMNS) - {"file_name"}
 
 
 def _mod(row: sqlite3.Row) -> InstalledMod:
@@ -63,6 +62,8 @@ class AdoptionStore:
                 "SELECT 1 FROM sqlite_master WHERE name = 'adopted_servers'"
             ).fetchone()
             if exists:
+                # A database that has tables but user_version 0 can only be a v1 file whose
+                # version pragma was never written, so it migrates from 1.
                 for version in range(current or 1, SCHEMA_VERSION):
                     self._db.execute(MIGRATIONS[version])
             self._db.executescript(SCHEMA)
@@ -115,14 +116,9 @@ class AdoptionStore:
             [(server_id, *(getattr(mod, c) for c in MOD_COLUMNS)) for mod in mods],
         )
 
-    def put_mod(self, server_id: str, mod: InstalledMod, replaces: str | None = None) -> None:
-        """Insert or replace one mod, optionally dropping the record of the file it replaced."""
+    def put_mod(self, server_id: str, mod: InstalledMod) -> None:
+        """Insert one mod, replacing the record with the same file name if there is one."""
         with self._lock, self._db:
-            if replaces and replaces != mod.file_name:
-                self._db.execute(
-                    "DELETE FROM server_mods WHERE server_id = ? AND file_name = ?",
-                    (server_id, replaces),
-                )
             self._insert_mods(server_id, [mod])
 
     def remove_mod(self, server_id: str, file_name: str) -> None:
@@ -130,17 +126,6 @@ class AdoptionStore:
             self._db.execute(
                 "DELETE FROM server_mods WHERE server_id = ? AND file_name = ?",
                 (server_id, file_name),
-            )
-
-    def update_mod(self, server_id: str, file_name: str, **values) -> None:
-        unknown = set(values) - UPDATABLE_MOD_COLUMNS
-        if unknown:
-            raise ValueError(f"Unknown mod fields: {sorted(unknown)}")
-        assignments = ", ".join(f"{column} = ?" for column in values)
-        with self._lock, self._db:
-            self._db.execute(
-                f"UPDATE server_mods SET {assignments} WHERE server_id = ? AND file_name = ?",
-                (*values.values(), server_id, file_name),
             )
 
     def set_latest_versions(self, server_id: str, latest: dict[str, tuple[str, str] | None],
