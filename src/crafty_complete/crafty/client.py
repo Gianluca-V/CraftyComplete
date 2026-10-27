@@ -12,6 +12,8 @@ CraftyState = Literal[
 
 # A file name no real server contains; see CraftyClient.check_files_permission.
 PERMISSION_PROBE_PATH = ".crafty-complete-permission-check"
+# The `error` Crafty's download endpoint returns for a missing file.
+FILE_NOT_FOUND = "File not found"
 
 # Index of each flag in Crafty's crafty-permissions mask (EnumPermissionsCrafty).
 CRAFTY_PERMISSIONS = ("server_creation", "user_config", "roles_config")
@@ -157,15 +159,24 @@ class CraftyClient:
             async with self._http.stream(
                 "GET", url, headers={"Authorization": f"Bearer {token}"}
             ) as response:
-                if response.status_code in (200, 404):
+                if response.status_code == 200:
                     return
                 await response.aread()
-                self._raise_for(response, _json(response))
+                body = _json(response)
+                if response.status_code == 404:
+                    if body.get("error") == FILE_NOT_FOUND:
+                        return
+                    # Any other 404 (e.g. a proxy) proves nothing: fail closed.
+                    raise CraftyError("forbidden", body.get("error", "HTTP 404"))
+                self._raise_for(response, body)
         except httpx.HTTPError as exc:
             raise CraftyError("unreachable", str(exc)) from exc
 
-    async def file_sha1(self, token: str, server_id: str, path: str) -> str:
-        """Stream a server file through Crafty and return its SHA-1."""
+    async def file_sha1(self, token: str, server_id: str, path: str) -> str | None:
+        """Stream a server file through Crafty and return its SHA-1.
+
+        Returns None when Crafty reports the file no longer exists (removed after listing).
+        """
         url = self._download_url(server_id, path)
         digest = hashlib.sha1()
         try:
@@ -174,7 +185,10 @@ class CraftyClient:
             ) as response:
                 if response.status_code >= 400:
                     await response.aread()
-                    self._raise_for(response, _json(response))
+                    body = _json(response)
+                    if response.status_code == 404 and body.get("error") == FILE_NOT_FOUND:
+                        return None
+                    self._raise_for(response, body)
                 async for chunk in response.aiter_bytes():
                     digest.update(chunk)
         except httpx.HTTPError as exc:

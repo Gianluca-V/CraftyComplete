@@ -428,6 +428,77 @@ def test_scan_handles_html_entities_in_file_names(db):
     assert by_file(response.json())["a&amp;b.jar"]["sha1"] == sha1(b"amp")
 
 
+def test_permission_probe_only_trusts_craftys_file_not_found(world, db):
+    """A 404 that is not Crafty's own "File not found" must not count as FILES access."""
+    client = client_for(world, db)
+    scan(client)
+    world.download_error = (404, "NOT_FOUND_BY_SOME_PROXY")
+    response = client.get(f"/api/servers/{SERVER}/mods")
+    client.__exit__(None, None, None)
+
+    assert response.status_code == 403
+    assert "fabric-api.jar" not in response.text
+
+
+def test_jar_removed_during_scan_is_skipped(world, db):
+    def remove_custom_jar():
+        world.files.pop("mods/custom.jar", None)
+
+    original = world._crafty
+
+    def crafty(request):
+        response = original(request)
+        if request.method == "POST" and json.loads(request.content)["path"] == "mods":
+            remove_custom_jar()  # listed, then gone before its download
+        return response
+
+    world._crafty = crafty
+    client = client_for(world, db)
+    response = scan(client)
+    client.__exit__(None, None, None)
+
+    assert response.status_code == 200
+    assert list(by_file(response.json())) == ["fabric-api.jar", "sodium.jar"]
+
+
+def test_failed_jar_download_aborts_scan_without_saving(world, db):
+    original = world._crafty
+
+    def crafty(request):
+        if request.url.path.endswith("mods%2Fsodium.jar/download") or \
+                "mods%2Fsodium.jar" in request.url.raw_path.decode():
+            return httpx.Response(500, json={"status": "error", "error": "DISK_ERROR"})
+        return original(request)
+
+    world._crafty = crafty
+    client = client_for(world, db)
+    response = scan(client)
+    stored = client.app.state.adoption_store.get(SERVER)
+    client.__exit__(None, None, None)
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "Crafty request failed: DISK_ERROR"}
+    assert stored.adopted is False
+
+
+def test_pinning_a_mod_removed_concurrently_is_not_found(world, db):
+    client = client_for(world, db)
+    scan(client)
+    store = client.app.state.adoption_store
+    real_get = store.get
+
+    def get_after_removal(server_id):
+        server = real_get(server_id)
+        server.mods = [m for m in server.mods if m.file_name != "sodium.jar"]
+        return server
+
+    store.get = get_after_removal
+    response = client.patch(f"/api/servers/{SERVER}/mods/sodium.jar", json={"pinned": True})
+    client.__exit__(None, None, None)
+
+    assert response.status_code == 404
+
+
 def test_pin_made_during_a_scan_is_kept(world, db):
     client = client_for(world, db)
     scan(client)

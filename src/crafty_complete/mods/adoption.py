@@ -57,6 +57,7 @@ class AdoptionService:
         await self._crafty.check_files_permission(token, server_id)
 
     async def _hash_jars(self, token: str, server_id: str) -> dict[str, str]:
+        """SHA-1 of every jar in mods/, skipping jars removed while the scan runs."""
         root = await self._crafty.list_dir(token, server_id, "")
         if not any(entry.is_dir and entry.name == MODS_DIR for entry in root):
             raise NoModsFolder()
@@ -65,7 +66,7 @@ class AdoptionService:
 
         limit = asyncio.Semaphore(HASH_CONCURRENCY)
 
-        async def hash_one(path: str) -> str:
+        async def hash_one(path: str) -> str | None:
             async with limit:
                 return await self._crafty.file_sha1(token, server_id, path)
 
@@ -75,7 +76,11 @@ class AdoptionService:
                 tasks = [group.create_task(hash_one(jar.path)) for jar in jars]
         except ExceptionGroup as group_error:
             raise group_error.exceptions[0] from None
-        return {jar.name: task.result() for jar, task in zip(jars, tasks)}
+        return {
+            jar.name: task.result()
+            for jar, task in zip(jars, tasks)
+            if task.result() is not None
+        }
 
     async def scan(self, token: str, server_id: str, loader: str | None = None,
                    game_version: str | None = None) -> AdoptedServer:

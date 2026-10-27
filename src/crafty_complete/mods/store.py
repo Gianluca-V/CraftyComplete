@@ -99,4 +99,5 @@ class AdoptionStore:
             ).rowcount
         if not updated:
             return None
-        return next(m for m in self.get(server_id).mods if m.file_name == file_name)
+        # A concurrent scan may have dropped the jar right after the update.
+        return next((m for m in self.get(server_id).mods if m.file_name == file_name), None)
