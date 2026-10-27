@@ -48,7 +48,7 @@ async def login(
     except CraftyLoginError as exc:
         raise _login_error(exc) from exc
     except CraftyError as exc:
-        if exc.state == "unauthorized":
+        if exc.state in ("unauthorized", "forbidden"):
             # Crafty issued a token but refuses to honour it, e.g. 2FA is enforced.
             raise HTTPException(
                 status_code=403,

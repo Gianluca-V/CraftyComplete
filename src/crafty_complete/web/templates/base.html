@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>craftyComplete — {% block title %}{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">crafty<span>Complete</span></a>
+    <nav class="main-nav" aria-label="Main">
+      <a href="/" {% if active == "browse" %}aria-current="page"{% endif %}>Browse</a>
+      <a href="/servers" {% if active == "servers" %}aria-current="page"{% endif %}>Servers</a>
+    </nav>
+    {% block header_extra %}{% endblock %}
+    <div class="account">
+      <span class="version">v{{ version }}</span>
+      <span class="username">{{ username }}</span>
+      <button id="logout" class="ghost">Log out</button>
+    </div>
+  </header>
+
+  {% block content %}{% endblock %}
+
+  <script src="{{ url_for('static', path='common.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

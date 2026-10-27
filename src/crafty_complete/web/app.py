@@ -17,7 +17,11 @@ from crafty_complete.config import Settings
 from crafty_complete.crafty.client import CookielessTransport, CraftyClient, CraftyStatus
 from crafty_complete.web.auth_routes import router as auth_router
 from crafty_complete.web.catalog_routes import router as catalog_router
+from crafty_complete.mods.adoption import AdoptionService
+from crafty_complete.mods.store import AdoptionStore
 from crafty_complete.web.deps import current_session, require_session
+from crafty_complete.web.server_routes import ServerId
+from crafty_complete.web.server_routes import router as server_router
 
 WEB_DIR = Path(__file__).parent
 
@@ -52,7 +56,14 @@ def create_app(
             app.state.crafty = CraftyClient(crafty_http)
         else:
             app.state.crafty = None
+
+        app.state.adoption_store = AdoptionStore(settings.database_path)
+        app.state.adoption = (
+            AdoptionService(app.state.crafty, app.state.catalog, app.state.adoption_store)
+            if app.state.crafty else None
+        )
         yield
+        app.state.adoption_store.close()
         await modrinth_http.aclose()
         if crafty_http:
             await crafty_http.aclose()
@@ -70,15 +81,28 @@ def create_app(
     templates = Jinja2Templates(directory=WEB_DIR / "templates")
     app.include_router(auth_router)
     app.include_router(catalog_router, dependencies=[Depends(require_session)])
+    app.include_router(server_router)
 
-    @app.get("/", response_class=HTMLResponse)
-    async def index(request: Request):
+    def page(request: Request, template: str, **context):
         session = current_session(request)
         if session is None:
             return RedirectResponse("/login", status_code=303)
         return templates.TemplateResponse(
-            request, "index.html", {"version": __version__, "username": session.username}
+            request, template,
+            {"version": __version__, "username": session.username, **context},
         )
+
+    @app.get("/", response_class=HTMLResponse)
+    async def index(request: Request):
+        return page(request, "index.html", active="browse")
+
+    @app.get("/servers", response_class=HTMLResponse)
+    async def servers_page(request: Request):
+        return page(request, "servers.html", active="servers")
+
+    @app.get("/servers/{server_id}", response_class=HTMLResponse)
+    async def server_page(request: Request, server_id: ServerId):
+        return page(request, "server.html", active="servers", server_id=server_id)
 
     @app.get("/login", response_class=HTMLResponse)
     async def login_page(request: Request):

@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Server mods{% endblock %}
+{% block content %}
+<main class="page" id="server-page" data-server-id="{{ server_id }}">
+  <a class="back" href="/servers">‹ All servers</a>
+  <div class="page-head">
+    <h1 id="server-name">Server</h1>
+    <p id="scan-info" class="muted"></p>
+  </div>
+
+  <section class="toolbar" aria-label="Scan settings">
+    <label class="inline-field">
+      Loader
+      <select id="loader">
+        <option value="">Detect</option>
+        <option value="fabric">Fabric</option>
+        <option value="forge">Forge</option>
+        <option value="neoforge">NeoForge</option>
+        <option value="quilt">Quilt</option>
+      </select>
+    </label>
+    <label class="inline-field">
+      Minecraft version
+      <select id="game-version">
+        <option value="">Detect</option>
+      </select>
+    </label>
+    <button id="scan" class="primary compact">Adopt server</button>
+  </section>
+
+  <div id="summary" class="summary" hidden></div>
+  <p id="status" class="status" role="status" aria-live="polite"></p>
+
+  <div class="table-wrap">
+    <table id="mod-table" class="mod-table" hidden>
+      <thead>
+        <tr>
+          <th scope="col">Mod</th>
+          <th scope="col">Version</th>
+          <th scope="col">Status</th>
+          <th scope="col"><span class="sr-only">Pin</span></th>
+        </tr>
+      </thead>
+      <tbody id="mod-rows"></tbody>
+    </table>
+  </div>
+</main>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', path='server.js') }}"></script>
+{% endblock %}

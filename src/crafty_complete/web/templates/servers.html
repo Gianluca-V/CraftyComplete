@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Servers{% endblock %}
+{% block content %}
+<main class="page">
+  <div class="page-head">
+    <h1>Your Crafty servers</h1>
+    <p class="muted">Servers your Crafty account can see. Open one to adopt it and track its mods.</p>
+  </div>
+  <p id="status" class="status" role="status" aria-live="polite"></p>
+  <ul id="server-list" class="server-list"></ul>
+</main>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', path='servers.js') }}"></script>
+{% endblock %}

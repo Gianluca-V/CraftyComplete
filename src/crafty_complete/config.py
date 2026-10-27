@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     user_agent: str = f"craftyComplete/{__version__}"
     http_timeout_seconds: float = 10.0
 
+    # SQLite file holding adopted servers and their mods.
+    database_path: str = "crafty_complete.sqlite3"
+
     session_idle_minutes: float = 60
     session_max_hours: float = 12
     # None: mark the cookie Secure only when the request arrived over HTTPS.

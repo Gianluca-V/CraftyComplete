@@ -39,13 +39,23 @@ def test_health_calls_crafty_with_bearer_token(requests_seen):
 
 def test_health_reports_rejected_token():
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(403, json={"status": "error", "error": "NOT_AUTHORIZED"})
+        return httpx.Response(403, json={"status": "error", "error": "ACCESS_DENIED"})
 
     with make_client(handler, crafty_url=CRAFTY, crafty_api_token="bad") as client:
         body = client.get("/api/health").json()
 
     assert body["crafty"]["state"] == "unauthorized"
-    assert body["crafty"]["error"] == "NOT_AUTHORIZED"
+    assert body["crafty"]["error"] == "ACCESS_DENIED"
+
+
+def test_health_reports_service_token_without_access_as_forbidden():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"status": "error", "error": "NOT_AUTHORIZED"})
+
+    with make_client(handler, crafty_url=CRAFTY, crafty_api_token="limited") as client:
+        body = client.get("/api/health").json()
+
+    assert body["crafty"]["state"] == "forbidden"
 
 
 def test_health_reports_unreachable_crafty():

@@ -20,7 +20,7 @@ def crafty_handler(seen: list[httpx.Request], login_status=200, login_body=None)
                                   "data": {"token": USER_TOKEN, "user_id": "1"}}
             return httpx.Response(login_status, json=body)
         if request.headers.get("Authorization") != f"Bearer {USER_TOKEN}":
-            return httpx.Response(403, json={"status": "error", "error": "NOT_AUTHORIZED"})
+            return httpx.Response(403, json={"status": "error", "error": "ACCESS_DENIED"})
         if path == "/api/v2/users/@me":
             return httpx.Response(200, json={"status": "ok", "data": ME})
         if path == "/api/v2/users/@me/permissions":

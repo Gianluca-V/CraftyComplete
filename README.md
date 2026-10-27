@@ -13,7 +13,7 @@ python -m venv .venv
 .venv/Scripts/python -m uvicorn crafty_complete.main:app --port 8500
 ```
 
-Open http://localhost:8500, log in with your Crafty account and browse Modrinth mods and modpacks.
+Open http://localhost:8500, log in with your Crafty account and browse Modrinth mods and modpacks. Under **Servers**, open a server and press **Adopt server** to identify the mods it already has and see which ones have updates.
 
 ## Authentication and permissions
 
@@ -37,6 +37,7 @@ Environment variables (or a `.env` file in the working directory):
 | `CRAFTY_COMPLETE_MODRINTH_URL` | `https://api.modrinth.com/v2` | Modrinth API base URL |
 | `CRAFTY_COMPLETE_USER_AGENT` | `craftyComplete/<version>` | User-Agent sent to Modrinth |
 | `CRAFTY_COMPLETE_HTTP_TIMEOUT_SECONDS` | `10` | Timeout for outbound HTTP calls |
+| `CRAFTY_COMPLETE_DATABASE_PATH` | `crafty_complete.sqlite3` | SQLite file with adopted servers and their mods |
 | `CRAFTY_COMPLETE_SESSION_IDLE_MINUTES` | `60` | Log out after this much inactivity |
 | `CRAFTY_COMPLETE_SESSION_MAX_HOURS` | `12` | Maximum session lifetime |
 | `CRAFTY_COMPLETE_SESSION_COOKIE_SECURE` | auto | `true`/`false` forces the cookie's `Secure` flag; by default it is set when the request arrived over HTTPS. Behind a reverse proxy that terminates TLS, set it to `true` (or run uvicorn with `--proxy-headers`). |
@@ -45,11 +46,16 @@ Environment variables (or a `.env` file in the working directory):
 
 Everything except `/api/health`, `/login` and `/api/auth/login` requires a session; without one, APIs answer `401` and pages redirect to `/login`. FastAPI's interactive docs (`/docs`, `/redoc`, `/openapi.json`) are disabled.
 
-- `GET /api/health` — service status and Crafty connectivity (`not_configured`, `connected`, `unauthorized`, `unreachable`, `error`).
+- `GET /api/health` — service status and Crafty connectivity (`not_configured`, `connected`, `unauthorized`, `forbidden`, `not_found`, `unreachable`, `error`).
 - `POST /api/auth/login` — JSON body `{"username", "password", "totp"?}`. Answers `401` for wrong credentials or 2FA code, `403` for disabled accounts or accounts Crafty refuses (for example when it enforces 2FA setup), `429` during Crafty's login cooldown, `502` when Crafty is unreachable, `503` when `CRAFTY_COMPLETE_CRAFTY_URL` is unset.
 - `POST /api/auth/logout` — ends the session (`204`). Must be sent as JSON (`415` otherwise). Logging in again also ends the previous session.
 - `GET /api/me` — the logged-in user and their Crafty-wide permissions (`server_creation`, `user_config`, `roles_config`).
 - `GET /api/servers` — the Crafty servers this user can see: `server_id`, `server_name`, `type`.
+- `POST /api/servers/{server_id}/scan` — adopt the server (first call) or rescan it. JSON body `{"loader"?, "game_version"?}` overrides the detected loader (`fabric`, `forge`, `neoforge`, `quilt`) and Minecraft version; otherwise the previous values are kept, or they are inferred from the identified mods. Reads every `mods/*.jar` through Crafty, identifies it on Modrinth by SHA-1 and checks for a newer compatible version. Nothing is updated. Answers `403` without Crafty file access to the server, `404` when the server has no `mods` folder, `502` when Modrinth fails (nothing is saved then).
+- `GET /api/servers/{server_id}/mods` — the stored result of the last scan (`adopted: false` before the first one). Each mod has `state` (`identified` or `unknown`), current and latest version, `update_available`, `pinned` and Modrinth's `server_side`; `counts.updates` excludes pinned mods.
+- `PATCH /api/servers/{server_id}/mods/{file_name}` — JSON `{"pinned": true|false}`. A pinned mod is never offered for update; the pin follows the Modrinth project (or the exact file, for unknown jars) across rescans.
+
+Server endpoints check, with your own Crafty token, that you can browse the server's files before reading or changing anything stored about it.
 - `GET /api/catalog/search` — search Modrinth. Query parameters:
   - `q` — free text
   - `type` — `mod` (default) or `modpack`

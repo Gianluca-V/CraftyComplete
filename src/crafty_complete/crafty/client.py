@@ -1,9 +1,14 @@
+import hashlib
 from dataclasses import dataclass
 from typing import Any, Literal
+from urllib.parse import quote
 
 import httpx
 
-CraftyState = Literal["not_configured", "connected", "unauthorized", "unreachable", "error"]
+CraftyState = Literal[
+    "not_configured", "connected", "unauthorized", "forbidden", "not_found", "unreachable",
+    "error",
+]
 
 # Index of each flag in Crafty's crafty-permissions mask (EnumPermissionsCrafty).
 CRAFTY_PERMISSIONS = ("server_creation", "user_config", "roles_config")
@@ -29,6 +34,13 @@ class CraftyStatus:
     state: CraftyState
     servers_visible: int | None = None
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class DirEntry:
+    name: str
+    path: str  # relative to the server directory
+    is_dir: bool
 
 
 @dataclass(frozen=True)
@@ -79,20 +91,67 @@ class CraftyClient:
     def __init__(self, http: httpx.AsyncClient):
         self._http = http
 
-    async def _get(self, path: str, token: str) -> Any:
+    @staticmethod
+    def _raise_for(response: httpx.Response, body: dict[str, Any]) -> None:
+        """Translate a Crafty error response.
+
+        Crafty answers an invalid or revoked token with 403 ACCESS_DENIED, but a valid
+        user lacking a server permission with 400 (or 403) NOT_AUTHORIZED.
+        """
+        error = body.get("error", f"HTTP {response.status_code}")
+        status = response.status_code
+        if status == 401 or (status == 403 and error == "ACCESS_DENIED"):
+            raise CraftyError("unauthorized", error)
+        if status == 403 or (status == 400 and error == "NOT_AUTHORIZED"):
+            raise CraftyError("forbidden", error)
+        if status == 404:
+            raise CraftyError("not_found", error)
+        raise CraftyError("error", error)
+
+    async def _request(self, method: str, path: str, token: str, json: Any = None) -> Any:
         try:
-            response = await self._http.get(
-                path, headers={"Authorization": f"Bearer {token}"}
+            response = await self._http.request(
+                method, path, json=json, headers={"Authorization": f"Bearer {token}"}
             )
         except httpx.HTTPError as exc:
             raise CraftyError("unreachable", str(exc)) from exc
 
         body = _json(response)
-        if response.status_code in (401, 403):
-            raise CraftyError("unauthorized", body.get("error", "NOT_AUTHORIZED"))
         if response.status_code >= 400 or body.get("status") != "ok":
-            raise CraftyError("error", body.get("error", f"HTTP {response.status_code}"))
+            self._raise_for(response, body)
         return body.get("data")
+
+    async def _get(self, path: str, token: str) -> Any:
+        return await self._request("GET", path, token)
+
+    async def list_dir(self, token: str, server_id: str, path: str) -> list[DirEntry]:
+        """List a directory of a server. Needs the FILES (or BACKUP) server permission."""
+        data = await self._request(
+            "POST", f"/api/v2/servers/{server_id}/files", token,
+            json={"page": "files", "path": path},
+        )
+        return [
+            DirEntry(name=name, path=entry.get("path", name), is_dir=bool(entry.get("dir")))
+            for name, entry in (data or {}).items()
+            if name != "root_path" and isinstance(entry, dict)
+        ]
+
+    async def file_sha1(self, token: str, server_id: str, path: str) -> str:
+        """Stream a server file through Crafty and return its SHA-1."""
+        url = f"/api/v2/servers/{server_id}/files/{quote(path, safe='')}/download"
+        digest = hashlib.sha1()
+        try:
+            async with self._http.stream(
+                "GET", url, headers={"Authorization": f"Bearer {token}"}
+            ) as response:
+                if response.status_code >= 400:
+                    await response.aread()
+                    self._raise_for(response, _json(response))
+                async for chunk in response.aiter_bytes():
+                    digest.update(chunk)
+        except httpx.HTTPError as exc:
+            raise CraftyError("unreachable", str(exc)) from exc
+        return digest.hexdigest()
 
     async def login(self, username: str, password: str, totp: str | None = None) -> str:
         """Exchange Crafty credentials for that user's API token."""

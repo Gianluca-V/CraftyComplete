@@ -26,6 +26,7 @@ class FakeClock:
 def make_client(handler: Handler, clock: Callable[[], float] | None = None,
                 **settings_overrides) -> TestClient:
     """Build a TestClient whose outbound HTTP calls go to `handler`."""
+    settings_overrides.setdefault("database_path", ":memory:")
     settings = Settings(_env_file=None, **settings_overrides)
     app = create_app(settings, transport=httpx.MockTransport(handler), clock=clock)
     return TestClient(app)

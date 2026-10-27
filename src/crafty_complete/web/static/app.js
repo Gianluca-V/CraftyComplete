@@ -12,39 +12,7 @@ const state = {
   pageSize: 20,
 };
 
-const $ = (id) => document.getElementById(id);
-// The UI copy is English, so numbers and dates use English formatting too.
-const numberFormat = new Intl.NumberFormat("en", { notation: "compact" });
-const dateFormat = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
 let searchController = null;
-
-function el(tag, attrs = {}, ...children) {
-  const node = document.createElement(tag);
-  for (const [key, value] of Object.entries(attrs)) {
-    if (key === "class") node.className = value;
-    else node.setAttribute(key, value);
-  }
-  for (const child of children) {
-    if (child != null) node.append(child);
-  }
-  return node;
-}
-
-function relativeDate(iso) {
-  if (!iso) return "";
-  const days = Math.round((new Date(iso) - Date.now()) / 86400000);
-  if (Math.abs(days) < 30) return dateFormat.format(days, "day");
-  if (Math.abs(days) < 365) return dateFormat.format(Math.round(days / 30), "month");
-  return dateFormat.format(Math.round(days / 365), "year");
-}
-
-function safeUrl(url) {
-  try {
-    return new URL(url).protocol === "https:" ? url : null;
-  } catch {
-    return null;
-  }
-}
 
 function renderCard(project) {
   const icon = el("img", {
@@ -81,12 +49,6 @@ function renderCard(project) {
       el("span", {}, `${numberFormat.format(project.follows)} followers`),
       el("span", {}, `Updated ${relativeDate(project.updated_at)}`)),
   );
-}
-
-function redirectIfLoggedOut(response) {
-  if (response.status !== 401) return false;
-  window.location.assign("/login");
-  return true;
 }
 
 function setStatus(message, isError = false) {
@@ -219,15 +181,6 @@ function bindEvents() {
 
   $("prev").addEventListener("click", () => { state.page -= 1; search(); window.scrollTo(0, 0); });
   $("next").addEventListener("click", () => { state.page += 1; search(); window.scrollTo(0, 0); });
-
-  $("logout").addEventListener("click", async () => {
-    await fetch("/api/auth/logout", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-    }).catch(() => {});
-    window.location.assign("/login");
-  });
 
   $("toggle-filters").addEventListener("click", (event) => {
     const open = $("filters").classList.toggle("is-open");

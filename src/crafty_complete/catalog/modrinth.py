@@ -18,6 +18,12 @@ from crafty_complete.catalog.models import (
 TAG_CACHE_SECONDS = 3600
 # Release game versions such as 1.20.1 or 26.3; excludes snapshots and pre-releases.
 RELEASE_VERSION = re.compile(r"^\d+\.\d+(\.\d+)?$")
+HASH_BATCH = 200
+PROJECT_BATCH = 100
+
+
+def _chunks(items: list[str], size: int) -> list[list[str]]:
+    return [items[i:i + size] for i in range(0, len(items), size)]
 
 
 def build_facets(query: SearchQuery) -> list[list[str]]:
@@ -79,6 +85,42 @@ class ModrinthProvider:
         if response.status_code >= 400:
             raise CatalogError(f"Modrinth request failed: HTTP {response.status_code}")
         return response.json()
+
+    async def _post(self, path: str, body: dict[str, Any]) -> Any:
+        try:
+            response = await self._http.post(path, json=body)
+        except httpx.HTTPError as exc:
+            raise CatalogError(f"Modrinth request failed: {exc}") from exc
+        if response.status_code >= 400:
+            raise CatalogError(f"Modrinth request failed: HTTP {response.status_code}")
+        return response.json()
+
+    async def versions_by_sha1(self, hashes: list[str]) -> dict[str, dict[str, Any]]:
+        """Modrinth versions whose files match these SHA-1 hashes; unknown hashes are absent."""
+        found: dict[str, dict[str, Any]] = {}
+        for batch in _chunks(hashes, HASH_BATCH):
+            found.update(
+                await self._post("version_files", {"hashes": batch, "algorithm": "sha1"})
+            )
+        return found
+
+    async def latest_versions(self, hashes: list[str], loader: str,
+                              game_version: str) -> dict[str, dict[str, Any]]:
+        """Newest version compatible with loader + game version, keyed by the current SHA-1."""
+        latest: dict[str, dict[str, Any]] = {}
+        for batch in _chunks(hashes, HASH_BATCH):
+            latest.update(await self._post("version_files/update", {
+                "hashes": batch, "algorithm": "sha1",
+                "loaders": [loader], "game_versions": [game_version],
+            }))
+        return latest
+
+    async def projects(self, ids: list[str]) -> dict[str, dict[str, Any]]:
+        found: dict[str, dict[str, Any]] = {}
+        for batch in _chunks(ids, PROJECT_BATCH):
+            for project in await self._get("projects", params={"ids": json.dumps(batch)}):
+                found[project["id"]] = project
+        return found
 
     async def search(self, query: SearchQuery) -> SearchPage:
         body = await self._get(

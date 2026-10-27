@@ -32,6 +32,10 @@ def crafty_failure(request: Request, session: Session, exc: CraftyError) -> HTTP
         # Crafty no longer accepts this token (revoked, user disabled or deleted).
         sessions(request).delete(session.id)
         return HTTPException(status_code=401, detail="Crafty session expired. Log in again.")
+    if exc.state == "forbidden":
+        return HTTPException(status_code=403, detail="Crafty denied this action for your account.")
+    if exc.state == "not_found":
+        return HTTPException(status_code=404, detail="Not found in Crafty.")
     if exc.state == "unreachable":
         return HTTPException(status_code=502, detail="Crafty is unreachable.")
     return HTTPException(status_code=502, detail=f"Crafty request failed: {exc.message}")

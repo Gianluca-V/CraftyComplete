@@ -1,0 +1,92 @@
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Path, Request
+from pydantic import BaseModel, Field
+
+from crafty_complete.auth.sessions import Session
+from crafty_complete.catalog.models import CatalogError, Loader
+from crafty_complete.crafty.client import CraftyError
+from crafty_complete.mods.adoption import AdoptionService, NoModsFolder
+from crafty_complete.web.deps import crafty_failure, require_crafty, require_session
+
+router = APIRouter(prefix="/api/servers")
+
+# Crafty server ids are UUIDs; anything else never reaches Crafty or the database.
+ServerId = Annotated[str, Path(pattern=r"^[a-z0-9-]{1,64}$")]
+
+FILES_FORBIDDEN = "You do not have file access to this server in Crafty."
+
+
+class ScanRequest(BaseModel):
+    loader: Loader | None = None
+    game_version: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class PinRequest(BaseModel):
+    pinned: bool
+
+
+def _adoption(request: Request) -> AdoptionService:
+    require_crafty(request)
+    return request.app.state.adoption
+
+
+def _fail(request: Request, session: Session, exc: CraftyError) -> HTTPException:
+    if exc.state == "forbidden":
+        return HTTPException(status_code=403, detail=FILES_FORBIDDEN)
+    return crafty_failure(request, session, exc)
+
+
+@router.post("/{server_id}/scan")
+async def scan(
+    server_id: ServerId,
+    body: ScanRequest,
+    request: Request,
+    session: Session = Depends(require_session),
+) -> dict:
+    """Adopt the server on first call, rescan it afterwards."""
+    adoption = _adoption(request)
+    try:
+        server = await adoption.scan(
+            session.crafty_token, server_id, body.loader, body.game_version
+        )
+    except CraftyError as exc:
+        raise _fail(request, session, exc) from exc
+    except NoModsFolder as exc:
+        raise HTTPException(status_code=404, detail="This server has no mods folder.") from exc
+    except CatalogError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return server.to_dict()
+
+
+@router.get("/{server_id}/mods")
+async def mods(
+    server_id: ServerId,
+    request: Request,
+    session: Session = Depends(require_session),
+) -> dict:
+    adoption = _adoption(request)
+    try:
+        await adoption.ensure_file_access(session.crafty_token, server_id)
+    except CraftyError as exc:
+        raise _fail(request, session, exc) from exc
+    return request.app.state.adoption_store.get(server_id).to_dict()
+
+
+@router.patch("/{server_id}/mods/{file_name}")
+async def pin(
+    server_id: ServerId,
+    file_name: str,
+    body: PinRequest,
+    request: Request,
+    session: Session = Depends(require_session),
+) -> dict:
+    adoption = _adoption(request)
+    try:
+        await adoption.ensure_file_access(session.crafty_token, server_id)
+    except CraftyError as exc:
+        raise _fail(request, session, exc) from exc
+    mod = request.app.state.adoption_store.set_pinned(server_id, file_name, body.pinned)
+    if mod is None:
+        raise HTTPException(status_code=404, detail="No adopted mod with that file name.")
+    return mod.to_dict()
