@@ -1,4 +1,5 @@
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 
 import httpx
 import pytest
@@ -39,11 +40,11 @@ def log_in(client: TestClient, token: str = USER_TOKEN) -> str:
     return session.id
 
 
-def make_logged_in_client(handler: Handler, **kwargs) -> TestClient:
-    client = make_client(handler, **kwargs)
-    client.__enter__()
-    log_in(client)
-    return client
+@contextmanager
+def make_logged_in_client(handler: Handler, **kwargs) -> Iterator[TestClient]:
+    with make_client(handler, **kwargs) as client:
+        log_in(client)
+        yield client
 
 
 @pytest.fixture

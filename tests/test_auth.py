@@ -256,12 +256,12 @@ def test_session_expires_after_absolute_lifetime(requests_seen):
     with make_client(crafty_handler(requests_seen), clock=clock, crafty_url=CRAFTY,
                      session_idle_minutes=60, session_max_hours=2) as client:
         log_in(client)
-        for _ in range(4):
-            clock.now += 50 * 60
-            client.get("/api/me")
-        response = client.get("/api/me")
-
-    assert response.status_code == 401
+        clock.now += 50 * 60
+        assert client.get("/api/me").status_code == 200
+        clock.now += 50 * 60
+        assert client.get("/api/me").status_code == 200  # 100 min: still inside 2 h
+        clock.now += 21 * 60
+        assert client.get("/api/me").status_code == 401  # 121 min: past 2 h
 
 
 def test_logout_drops_session_without_revoking_crafty_tokens(requests_seen):
@@ -339,9 +339,15 @@ def test_api_docs_are_not_published(requests_seen):
     assert statuses == [404, 404, 404]
 
 
-def test_session_cookie_secure_flag_follows_setting(requests_seen):
+@pytest.mark.parametrize(
+    ("setting", "base_url", "secure"),
+    [(None, "http://testserver", False), (None, "https://testserver", True),
+     (True, "http://testserver", True), (False, "https://testserver", False)],
+)
+def test_session_cookie_secure_flag(setting, base_url, secure, requests_seen):
     with make_client(crafty_handler(requests_seen), crafty_url=CRAFTY,
-                     session_cookie_secure=True) as client:
+                     session_cookie_secure=setting) as client:
+        client.base_url = base_url
         response = login(client)
 
-    assert "Secure" in response.headers["set-cookie"]
+    assert ("Secure" in response.headers["set-cookie"]) is secure

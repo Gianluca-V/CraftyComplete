@@ -22,6 +22,7 @@ Open http://localhost:8500, log in with your Crafty account and browse Modrinth 
 - The browser only receives an opaque session cookie (`HttpOnly`, `SameSite=Strict`). Crafty tokens stay in the server's memory and are never written to disk, so restarting craftyComplete logs everyone out.
 - Sessions end after `SESSION_IDLE_MINUTES` without activity, after `SESSION_MAX_HOURS` in total, on logout, or as soon as Crafty rejects the token.
 - Logging out ends the craftyComplete session only; it does not log you out of the Crafty panel.
+- Sessions live in one process, so run a single uvicorn worker (the default). With `--workers` above 1, users would be logged out whenever a request lands on another worker.
 - Crafty's login cooldown counts failed attempts per IP address. All logins arrive from craftyComplete's address, so repeated failures by one user also delay logins for everyone else for a few minutes.
 
 ## Configuration
