@@ -71,6 +71,10 @@ class UpdateFakes(CreationFakes):
         base = f"/api/v2/servers/{SERVER}"
         if path == f"{base}/stats":
             return httpx.Response(200, json={"status": "ok", "data": {"running": self.running}})
+        if path == f"{base}/files" and request.method == "POST":
+            # Crafty lists with os.listdir: a folder that does not exist is an error.
+            if json.loads(request.content)["path"].strip("/") not in self.subdirs:
+                return httpx.Response(500, text="FileNotFoundError")
         if path == f"{base}/files/create" and request.method == "PUT":
             body = json.loads(request.content)
             parent, name = body["parent"].strip("/"), body["name"]
@@ -85,6 +89,9 @@ class UpdateFakes(CreationFakes):
             for item in json.loads(request.content)["file_system_objects"]:
                 source, target_dir = item["source_path"], item["target_path"].strip("/")
                 assert target_dir in self.subdirs, f"move target {target_dir} missing"
+                if source not in self.files:  # Crafty: shutil.move raises, answered as 500
+                    return httpx.Response(500, json={"status": "error",
+                                                     "error": "FileNotFoundError"})
                 destination = f"{target_dir}/{source.rsplit('/', 1)[-1]}"
                 self.files[destination] = self.files.pop(source)
                 self.moves.append((source, destination))
@@ -408,3 +415,186 @@ def test_no_update_is_offered_when_the_linked_version_is_gone():
     versions = [{"id": "b", "version_type": "release"}, {"id": "a", "version_type": "release"}]
     assert newest_update(versions, "gone") is None
     assert newest_update(versions, None)["id"] == "b"
+
+
+# ---- Review follow-ups (L32) ----
+
+PACK_V2_KEEPS_OLD_ONLY = build_mrpack(
+    files=[pack_file("mods/fabric-api-0.92.12.jar", FABRIC_API_NEW),
+           pack_file("mods/old-only.jar", OLD_ONLY),
+           pack_file("mods/new-mod.jar", NEW_MOD)],
+    entries={"overrides/config/pack.toml": CONFIG_V2,
+             "overrides/config/shared.toml": SHARED_CONFIG},
+)
+
+
+class KeepFakes(UpdateFakes):
+    """Pack version 2 still ships mods/old-only.jar unchanged."""
+
+    def __init__(self):
+        super().__init__()
+        self.cdn_extra.update({"pack2.mrpack": PACK_V2_KEEPS_OLD_ONLY, "old-only.jar": OLD_ONLY})
+
+    def _modrinth(self, request):
+        path = request.url.path
+        if path == f"/v2/version/{V2}":
+            return httpx.Response(200, json=self.version(V2, "2.0.0", PACK_V2_KEEPS_OLD_ONLY))
+        if path == "/v2/project/PM/version":
+            return httpx.Response(200, json=[self.version(V2, "2.0.0", PACK_V2_KEEPS_OLD_ONLY),
+                                             self.version("pk-1", "1.0.0", PACK_V1)])
+        return super()._modrinth(request)
+
+
+def test_update_restores_pack_mods_missing_from_the_server(tmp_path, db):
+    fakes = KeepFakes()
+    del fakes.files["mods/old-only.jar"]
+    client = linked_client(fakes, db, tmp_path)
+    job = wait_for(client, update(client, version_id=V2).json()["job_id"])
+    names = {m["file_name"] for m in client.get(f"/api/servers/{SERVER}/mods").json()["mods"]}
+    client.__exit__(None, None, None)
+
+    assert job["status"] == "succeeded", job
+    assert fakes.files["mods/old-only.jar"] == OLD_ONLY
+    assert job["result"]["restored"] == ["mods/old-only.jar"]
+    assert "old-only.jar" in names
+
+
+def test_update_does_not_restore_a_pack_mod_the_user_replaced(tmp_path, db):
+    fakes = KeepFakes()
+    del fakes.files["mods/old-only.jar"]
+    fakes.files["mods/old-only-fork.jar"] = b"my-fork"
+    fakes.identified = {
+        sha1(OLD_ONLY): {"id": "oo-1", "project_id": "P9", "version_number": "1",
+                         "loaders": ["fabric"], "game_versions": ["1.20.1"]},
+        sha1(b"my-fork"): {"id": "oo-f", "project_id": "P9", "version_number": "1-fork",
+                           "loaders": ["fabric"], "game_versions": ["1.20.1"]},
+    }
+    client = linked_client(fakes, db, tmp_path)
+    job = wait_for(client, update(client, version_id=V2).json()["job_id"])
+    client.__exit__(None, None, None)
+
+    assert job["status"] == "succeeded", job
+    assert "mods/old-only.jar" not in fakes.files
+    assert fakes.files["mods/old-only-fork.jar"] == b"my-fork"
+    assert job["result"]["restored"] == []
+
+
+def test_a_move_that_succeeded_before_a_timeout_is_not_a_failure(tmp_path, db):
+    fakes = UpdateFakes()
+    client = linked_client(fakes, db, tmp_path)
+    original = fakes._crafty
+    failed = []
+
+    def flaky(request):
+        response = original(request)
+        if request.url.path.endswith("/files/move") and not failed:
+            failed.append(True)  # Crafty moved the file, then the answer was lost.
+            return httpx.Response(502, text="Bad Gateway")
+        return response
+
+    fakes._crafty = flaky
+    job = wait_for(client, update(client, version_id=V2).json()["job_id"])
+    client.__exit__(None, None, None)
+
+    assert failed
+    assert job["status"] == "succeeded", job
+    assert sorted(path.split("/", 3)[3] for path in backup_files(fakes)) == [
+        "config/pack.toml", "mods/fabric-api.jar", "mods/old-only.jar"]
+
+
+def test_existing_files_are_found_by_name_whatever_path_crafty_lists(tmp_path, db):
+    fakes = UpdateFakes()
+    client = linked_client(fakes, db, tmp_path)
+    original = fakes._crafty
+
+    def absolute_paths(request):
+        response = original(request)
+        if request.method == "POST" and request.url.path == f"/api/v2/servers/{SERVER}/files":
+            body = response.json()
+            for name, entry in body["data"].items():
+                if name != "root_path":
+                    entry["path"] = f"/var/opt/minecraft/crafty/servers/{SERVER}/{entry['path']}"
+            return httpx.Response(200, json=body)
+        return response
+
+    fakes._crafty = absolute_paths
+    job = wait_for(client, update(client, version_id=V2).json()["job_id"])
+    client.__exit__(None, None, None)
+
+    assert job["status"] == "succeeded", job
+    assert "mods/fabric-api.jar" not in fakes.files
+    assert sorted(path.split("/", 3)[3] for path in backup_files(fakes)) == [
+        "config/pack.toml", "mods/fabric-api.jar", "mods/old-only.jar"]
+
+
+BUSY = "A modpack update is changing this server's files; try again when it finishes."
+
+
+def test_mod_changes_are_refused_while_an_update_writes_files(tmp_path, db):
+    fakes = UpdateFakes()
+    client = linked_client(fakes, db, tmp_path)
+    locks = client.app.state.locks
+    seen = []
+    original = fakes._crafty
+
+    def watch(request):
+        if request.url.path.endswith("/files/upload"):
+            seen.append(locks.busy(SERVER))
+        return original(request)
+
+    fakes._crafty = watch
+    job = wait_for(client, update(client, version_id=V2).json()["job_id"])
+    after = locks.busy(SERVER)
+
+    with locks.marked_busy(SERVER, BUSY):
+        refused = [
+            client.post(f"/api/servers/{SERVER}/mods", json={"project_id": "abc"}),
+            client.post(f"/api/servers/{SERVER}/mods/sodium.jar/update", json={}),
+            client.post(f"/api/servers/{SERVER}/update-all", json={}),
+            client.post(f"/api/servers/{SERVER}/check-updates", json={}),
+            client.post(f"/api/servers/{SERVER}/scan", json={}),
+            client.patch(f"/api/servers/{SERVER}/mods/sodium.jar", json={"pinned": True}),
+        ]
+    readable = client.get(f"/api/servers/{SERVER}/mods").status_code
+    client.__exit__(None, None, None)
+
+    assert job["status"] == "succeeded", job
+    assert seen and set(seen) == {BUSY}
+    assert after is None
+    assert [r.status_code for r in refused] == [409] * 6
+    assert {r.json()["detail"] for r in refused} == {BUSY}
+    assert readable == 200
+
+
+PACK_V2_NEW_FOLDER = build_mrpack(
+    files=[pack_file("mods/fabric-api-0.92.12.jar", FABRIC_API_NEW),
+           pack_file("mods/new-mod.jar", NEW_MOD)],
+    entries={"overrides/config/pack.toml": CONFIG_V2,
+             "overrides/config/shared.toml": SHARED_CONFIG,
+             "overrides/config/new-mod/settings.toml": b"new-mod-settings"},
+)
+
+
+class NewFolderFakes(KeepFakes):
+    def __init__(self):
+        super().__init__()
+        self.cdn_extra["pack2.mrpack"] = PACK_V2_NEW_FOLDER
+
+    def _modrinth(self, request):
+        path = request.url.path
+        if path == f"/v2/version/{V2}":
+            return httpx.Response(200, json=self.version(V2, "2.0.0", PACK_V2_NEW_FOLDER))
+        if path == "/v2/project/PM/version":
+            return httpx.Response(200, json=[self.version(V2, "2.0.0", PACK_V2_NEW_FOLDER),
+                                             self.version("pk-1", "1.0.0", PACK_V1)])
+        return super()._modrinth(request)
+
+
+def test_update_adds_files_in_folders_the_server_does_not_have_yet(tmp_path, db):
+    fakes = NewFolderFakes()
+    client = linked_client(fakes, db, tmp_path)
+    job = wait_for(client, update(client, version_id=V2).json()["job_id"])
+    client.__exit__(None, None, None)
+
+    assert job["status"] == "succeeded", job
+    assert fakes.files["config/new-mod/settings.toml"] == b"new-mod-settings"

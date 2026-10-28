@@ -110,6 +110,7 @@ function setBusy(busy) {
   if (!busy) {
     $("update-all").disabled = updateCount === 0;
     $("modpack-link").disabled = $("modpack-link-version").disabled;
+    $("modpack-update").disabled = $("modpack-version").options.length === 0;
     document.querySelectorAll("#mod-rows button[data-unknown]").forEach((b) => { b.disabled = true; });
   }
 }
@@ -280,6 +281,7 @@ function describeResult(result) {
   if ("added" in result) {
     parts.push(`${result.added.length} added, ${result.updated.length} updated, ` +
       `${result.removed.length} removed. Old files are in ${result.backup_folder}. `);
+    if (result.restored.length) parts.push(`Restored pack mods the server was missing: ${result.restored.join(", ")}. `);
     if (result.own_mods_kept.length) parts.push(`Kept your own mods: ${result.own_mods_kept.join(", ")}. `);
     if (result.restart_required) parts.push(el("strong", {}, "Start the server in Crafty to apply the update."));
   } else {

@@ -17,6 +17,7 @@ from crafty_complete.modpacks.packs import PackReader, describe_failure, is_mod_
 from crafty_complete.modpacks.transfer import ServerWriter, parent_of
 
 BACKUP_ROOT = ".crafty-complete/backups"
+UPDATING = "A modpack update is changing this server's files; try again when it finishes."
 
 
 def _slug(text: str | None) -> str:
@@ -80,13 +81,19 @@ class ModpackUpdater:
         old = self._store.get_modpack_files(server_id)
         pack_path, index, new = await self._linker.pack_files(job, target, server, workdir)
         incoming = sorted(p for p in new if p not in old or new[p] != old[p])
-        projects = await self._projects_of(new, incoming)
-        files = await self._packs.fetch_files(job, index, pack_path, set(incoming), workdir)
+        # Pack mods the server lacks although the pack did not change them (deleted by
+        # hand, or never installed): the update brings them back, like CurseForge does.
+        recorded = {m.sha1 for m in server.mods} | {f"mods/{m.file_name}" for m in server.mods}
+        maybe_missing = sorted(p for p in new if p not in incoming and is_mod_jar(p)
+                               and new[p] not in recorded and p not in recorded)
+        projects = await self._projects_of(new, incoming + maybe_missing)
+        files = await self._packs.fetch_files(job, index, pack_path,
+                                              set(incoming + maybe_missing), workdir)
         backup = (f"{BACKUP_ROOT}/{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}-"
                   f"{_slug(server.modpack_version_number)}-to-"
                   f"{_slug(target.version.get('version_number'))}")
 
-        async with self._locks(server_id):
+        async with self._locks.exclusive(server_id, UPDATING):
             # Decide on the state as it is now: the download can take minutes, and mods can
             # be installed or pinned, or the server started, meanwhile.
             if (await self._crafty.server_stats(token, server_id)).get("running"):
@@ -96,10 +103,21 @@ class ModpackUpdater:
                                  "start the update again.")
             server = self._store.get(server_id)
             plan = self._plan(job, server, old, new, projects)
-            to_send = {p: f for p, f in files.items() if p not in plan["kept"]}
+            candidates = (plan["updated"] + plan["removed"] + plan["displaced"]
+                          + plan["added"])
+            # Folders first: Crafty cannot list or upload into a folder that does not exist.
+            await self._writer.create_folders(
+                job, token, server_id,
+                {parent_of(p) for p in files} | {f"{backup}/{parent_of(p)}".rstrip("/")
+                                                 for p in candidates})
+            existing: set[str] = set()
+            for folder in sorted({parent_of(p) for p in candidates + maybe_missing}):
+                existing |= await self._writer.file_names(token, server_id, folder)
+            restored = self._restorable(job, server, maybe_missing, existing, projects)
+            to_send = {p: f for p, f in files.items() if p not in plan["kept"]
+                       and (p not in maybe_missing or p in restored)}
             moved = await self._apply(job, token, server_id, to_send,
-                                      plan["updated"] + plan["removed"] + plan["displaced"]
-                                      + plan["added"], backup)
+                                      [p for p in candidates if p in existing], backup)
 
             hashes = {m.file_name: m.sha1 for m in server.mods
                       if f"mods/{m.file_name}" not in moved}
@@ -121,6 +139,7 @@ class ModpackUpdater:
             "added": plan["added"],
             "updated": plan["updated"],
             "removed": plan["removed"],
+            "restored": restored,
             "own_mods_kept": sorted(m.file_name for m in server.mods
                                     if m.sha1 not in old_hashes
                                     and m.file_name not in displaced_names
@@ -175,20 +194,30 @@ class ModpackUpdater:
                 "removed": [p for p in removed if p not in kept],
                 "displaced": sorted(displaced), "kept": kept}
 
-    async def _apply(self, job: Job, token: str, server_id: str, files: dict[str, Path],
-                     candidates: list[str], backup: str) -> set[str]:
-        """Move existing `candidates` into the backup, then upload `files`."""
-        await self._writer.create_folders(
-            job, token, server_id,
-            {parent_of(p) for p in files} | {f"{backup}/{parent_of(p)}".rstrip("/")
-                                             for p in candidates})
-        existing: set[str] = set()
-        for folder in sorted({parent_of(p) for p in candidates}):
-            entries = await self._writer.retry(
-                lambda: self._crafty.list_dir(token, server_id, folder))
-            existing |= {e.path for e in entries if not e.is_dir}
+    @staticmethod
+    def _restorable(job: Job, server: AdoptedServer, maybe_missing: list[str],
+                    existing: set[str], projects: dict[str, str]) -> list[str]:
+        """The missing pack mods to upload again, unless the user replaced them."""
+        by_project = {m.project_id: f"mods/{m.file_name}" for m in server.mods
+                      if m.project_id}
+        restored = []
+        for path in maybe_missing:
+            if path in existing:
+                continue
+            replacement = by_project.get(projects.get(path))
+            if replacement:
+                job.warnings.append(f"Did not restore the pack's {path}: the server has "
+                                    f"{replacement} of the same project.")
+                continue
+            restored.append(path)
+        return restored
 
-        to_move = [p for p in candidates if p in existing]
+    async def _apply(self, job: Job, token: str, server_id: str, files: dict[str, Path],
+                     to_move: list[str], backup: str) -> set[str]:
+        """Move the existing files `to_move` into the backup, then upload `files`.
+
+        Their folders, and the backup's, must exist.
+        """
         moved: set[str] = set()
         try:
             job.begin("Moving replaced files to the backup", total=len(to_move))

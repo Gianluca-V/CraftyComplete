@@ -38,7 +38,15 @@ def _fail(request: Request, session: Session, exc: CraftyError) -> HTTPException
     return crafty_failure(request, session, exc)
 
 
-@router.post("/{server_id}/scan")
+def require_not_busy(server_id: ServerId, request: Request,
+                     session: Session = Depends(require_session)) -> None:
+    """Mod changes during a modpack update would wait minutes for its lock: refuse them."""
+    reason = request.app.state.locks.busy(server_id)
+    if reason:
+        raise HTTPException(status_code=409, detail=reason)
+
+
+@router.post("/{server_id}/scan", dependencies=[Depends(require_not_busy)])
 async def scan(
     server_id: ServerId,
     body: ScanRequest,
@@ -74,7 +82,7 @@ async def mods(
     return request.app.state.adoption_store.get(server_id).to_dict()
 
 
-@router.patch("/{server_id}/mods/{file_name}")
+@router.patch("/{server_id}/mods/{file_name}", dependencies=[Depends(require_not_busy)])
 async def pin(
     server_id: ServerId,
     file_name: str,
@@ -120,7 +128,7 @@ async def _run(request: Request, session: Session, operation) -> dict:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-@router.post("/{server_id}/mods")
+@router.post("/{server_id}/mods", dependencies=[Depends(require_not_busy)])
 async def install(
     server_id: ServerId,
     body: InstallRequest,
@@ -132,7 +140,7 @@ async def install(
         session.crafty_token, server_id, body.project_id))
 
 
-@router.post("/{server_id}/mods/{file_name}/update", dependencies=[Depends(require_json)])
+@router.post("/{server_id}/mods/{file_name}/update", dependencies=[Depends(require_json), Depends(require_not_busy)])
 async def update(
     server_id: ServerId,
     file_name: str,
@@ -143,7 +151,7 @@ async def update(
         session.crafty_token, server_id, file_name))
 
 
-@router.post("/{server_id}/update-all", dependencies=[Depends(require_json)])
+@router.post("/{server_id}/update-all", dependencies=[Depends(require_json), Depends(require_not_busy)])
 async def update_all(
     server_id: ServerId,
     request: Request,
@@ -153,7 +161,7 @@ async def update_all(
         session.crafty_token, server_id))
 
 
-@router.post("/{server_id}/check-updates", dependencies=[Depends(require_json)])
+@router.post("/{server_id}/check-updates", dependencies=[Depends(require_json), Depends(require_not_busy)])
 async def check_updates(
     server_id: ServerId,
     request: Request,

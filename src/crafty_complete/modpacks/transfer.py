@@ -76,4 +76,28 @@ class ServerWriter:
         await gather(send(r, s) for r, s in files.items())
 
     async def move(self, token: str, server_id: str, source: str, target_folder: str) -> None:
-        await self.retry(lambda: self._crafty.move_file(token, server_id, source, target_folder))
+        try:
+            await self.retry(lambda: self._crafty.move_file(token, server_id, source,
+                                                            target_folder))
+        except CraftyError as exc:
+            # A retry after an answer that was lost finds the source already gone.
+            if exc.state == "unauthorized" or not await self._moved(
+                    token, server_id, source, target_folder):
+                raise
+
+    async def _moved(self, token: str, server_id: str, source: str, target_folder: str) -> bool:
+        name = PurePosixPath(source).name
+        try:
+            in_source = await self.retry(
+                lambda: self._crafty.list_dir(token, server_id, parent_of(source)))
+            in_target = await self.retry(
+                lambda: self._crafty.list_dir(token, server_id, target_folder))
+        except CraftyError:
+            return False
+        return (all(e.name != name for e in in_source)
+                and any(e.name == name and not e.is_dir for e in in_target))
+
+    async def file_names(self, token: str, server_id: str, folder: str) -> set[str]:
+        """Server paths of the files in `folder`, built from the names Crafty lists."""
+        entries = await self.retry(lambda: self._crafty.list_dir(token, server_id, folder))
+        return {f"{folder}/{e.name}" if folder else e.name for e in entries if not e.is_dir}
