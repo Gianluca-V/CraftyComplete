@@ -122,7 +122,7 @@ class ModpackLinker:
             raise JobFailure(f"The modpack file is for {index.loader} {index.minecraft}; "
                              f"the server runs {server.loader} {server.game_version}.")
         kept = await self._packs.drop_client_only(
-            job, await self._packs.file_hashes(index, pack_path))
+            job, index, await self._packs.file_hashes(index, pack_path))
         return pack_path, index, {p: h for p, h in kept.items() if sendable(p)}
 
     def workdir(self) -> Path:

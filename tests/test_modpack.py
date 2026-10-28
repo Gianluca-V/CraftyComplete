@@ -9,7 +9,7 @@ import pytest
 
 from crafty_complete.modpacks.mrpack import MrpackError, read_index
 from tests.conftest import CRAFTY, USER_TOKEN, log_in, make_client
-from tests.test_install import FakeServices, sha1, sha512
+from tests.test_install import FakeServices, dep, sha1, sha512
 
 NEW_SERVER = "new-server-1"
 MOD_A = b"mod-a-bytes"
@@ -596,6 +596,73 @@ def test_client_only_mods_are_skipped_even_without_env(tmp_path, db):
     assert "mods/mod-a.jar" in fakes.server_files
     assert ("Skipped 1 client-only mod (not needed on a server): Sodium (mods/mod-b.jar)."
             in job["warnings"])
+
+
+def identified(vid, project_id, deps=()):
+    return {"id": vid, "project_id": project_id, "version_number": "1.0",
+            "loaders": ["fabric"], "game_versions": ["1.20.1"], "dependencies": list(deps)}
+
+
+def test_client_only_pack_file_required_by_a_server_mod_is_kept(tmp_path, db):
+    """Prominence II marks libraries like athena as server-unsupported although server mods
+    require them; the server then refuses to start, so a required library is kept."""
+    fakes = CreationFakes()
+    fakes.cdn_extra["client-only.jar"] = CLIENT_MOD
+    fakes.identified = {
+        sha1(MOD_A): identified("fa-1", "P1", deps=[dep("PL")]),
+        sha1(MOD_B): identified("li-1", "P3"),
+        sha1(CLIENT_MOD): identified("at-1", "PL"),
+    }
+    client = creation_client(fakes, db, tmp_path)
+    job = wait_for(client, start(client).json()["job_id"])
+    mods = client.get(f"/api/servers/{NEW_SERVER}/mods").json()["mods"]
+    client.__exit__(None, None, None)
+
+    assert job["status"] == "succeeded", job
+    assert fakes.server_files["mods/client-only.jar"] == CLIENT_MOD
+    assert ("Kept 1 mod marked client-only because server mods require it: "
+            "Athena (mods/client-only.jar).") in job["warnings"]
+    assert "client-only.jar" in {m["file_name"] for m in mods}
+
+
+def test_required_libraries_are_kept_transitively(tmp_path, db):
+    """A dependency named only by version id, and a library Modrinth calls client-only, are
+    kept when a kept mod needs them, and so are their own required dependencies."""
+    fakes = CreationFakes()
+    fakes.cdn_extra["client-only.jar"] = CLIENT_MOD
+    fakes.identified = {
+        sha1(MOD_A): identified("fa-1", "P1", deps=[{"project_id": None, "version_id": "so-1",
+                                                     "dependency_type": "required"}]),
+        sha1(MOD_B): identified("so-1", "P2", deps=[dep("PL")]),
+        sha1(CLIENT_MOD): identified("at-1", "PL"),
+    }
+    client = creation_client(fakes, db, tmp_path)
+    job = wait_for(client, start(client).json()["job_id"])
+    client.__exit__(None, None, None)
+
+    assert job["status"] == "succeeded", job
+    assert fakes.server_files["mods/mod-b.jar"] == MOD_B
+    assert fakes.server_files["mods/client-only.jar"] == CLIENT_MOD
+    assert ("Kept 2 mods marked client-only because server mods require them: "
+            "Sodium (mods/mod-b.jar), Athena (mods/client-only.jar).") in job["warnings"]
+    assert not any(w.startswith("Skipped") for w in job["warnings"])
+
+
+def test_optional_dependency_does_not_keep_a_client_only_mod(tmp_path, db):
+    fakes = CreationFakes()
+    fakes.cdn_extra["client-only.jar"] = CLIENT_MOD
+    fakes.identified = {
+        sha1(MOD_A): identified("fa-1", "P1", deps=[dep("PL", "optional"), dep("P9")]),
+        sha1(MOD_B): identified("li-1", "P3"),
+        sha1(CLIENT_MOD): identified("at-1", "PL"),
+    }
+    client = creation_client(fakes, db, tmp_path)
+    job = wait_for(client, start(client).json()["job_id"])
+    client.__exit__(None, None, None)
+
+    assert job["status"] == "succeeded", job
+    assert "mods/client-only.jar" not in fakes.server_files
+    assert not any(w.startswith("Kept") for w in job["warnings"])
 
 
 def test_large_files_use_chunked_upload(tmp_path, db):

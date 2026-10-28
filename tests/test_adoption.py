@@ -42,6 +42,8 @@ PROJECTS = [
      "client_side": "optional", "server_side": "optional", "project_type": "mod"},
     {"id": "P2", "slug": "sodium", "title": "Sodium", "icon_url": None,
      "client_side": "required", "server_side": "unsupported", "project_type": "mod"},
+    {"id": "PL", "slug": "athena", "title": "Athena", "icon_url": None,
+     "client_side": "required", "server_side": "unsupported", "project_type": "mod"},
 ]
 
 

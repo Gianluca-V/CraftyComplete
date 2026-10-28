@@ -42,6 +42,8 @@ class PackIndex:
     server_files: list[PackFile]
     # server-relative path -> archive entry to copy it from
     overrides: dict[str, str] = field(default_factory=dict)
+    # Files the index marks as not for servers; packs mislabel libraries server mods need.
+    client_files: list[PackFile] = field(default_factory=list)
 
 
 def safe_relative_path(path: str) -> str:
@@ -96,6 +98,13 @@ def read_index(pack_path: Path) -> PackIndex:
         _server_file(entry) for entry in index.get("files") or []
         if (entry.get("env") or {}).get("server", "required") != "unsupported"
     ]
+    client_files = []
+    for entry in index.get("files") or []:
+        if (entry.get("env") or {}).get("server") == "unsupported":
+            try:
+                client_files.append(_server_file(entry))
+            except MrpackError:  # never installed on a server, so never a reason to refuse
+                continue
     seen: set[str] = set()
     for pack_file in server_files:
         if pack_file.path in seen:  # two downloads into one file could mix their bytes
@@ -127,4 +136,5 @@ def read_index(pack_path: Path) -> PackIndex:
         loader_version=loader_version,
         server_files=server_files,
         overrides=overrides,
+        client_files=[f for f in client_files if f.path not in seen],
     )

@@ -65,7 +65,7 @@ class PackReader:
     async def download_files(self, job: Job, index: PackIndex, paths: set[str],
                              workdir: Path) -> dict[str, Path]:
         """Download the pack's server files at `paths`, verified. Server path -> local file."""
-        wanted = [f for f in index.server_files if f.path in paths]
+        wanted = [f for f in index.server_files + index.client_files if f.path in paths]
         files: dict[str, Path] = {}
         job.begin("Downloading mods", total=len(wanted))
         limit = asyncio.Semaphore(DOWNLOAD_CONCURRENCY)
@@ -150,27 +150,68 @@ class PackReader:
         await asyncio.to_thread(hash_overrides)
         return hashes
 
-    async def drop_client_only(self, job: Job,
+    async def drop_client_only(self, job: Job, index: PackIndex,
                                hashes: dict[str, str | None]) -> dict[str, str | None]:
-        """The pack files without jars whose Modrinth project cannot run on a server.
+        """The pack files without jars that cannot run on a server.
 
         The index's `env` is optional and many packs omit it, which the spec reads as
-        "needed everywhere"; Modrinth's project data is the reliable source.
+        "needed everywhere"; Modrinth's project data is the reliable source. Both can call a
+        library client-only although server mods require it (Prominence II marks athena so),
+        so a client-only jar that a kept mod requires on Modrinth is kept, transitively.
         """
         job.begin("Checking which mods run on a server")
+        client_jars = {f.path: f.sha1 for f in index.client_files
+                       if is_mod_jar(f.path) and f.sha1 and f.path not in hashes}
         jars = {path: sha1 for path, sha1 in hashes.items() if is_mod_jar(path) and sha1}
-        versions = await self._modrinth.versions_by_sha1(sorted(set(jars.values())))
+        versions = await self._modrinth.versions_by_sha1(
+            sorted(set(jars.values()) | set(client_jars.values())))
         projects = await self._modrinth.projects(
             sorted({v["project_id"] for v in versions.values()}))
-        kept = dict(hashes)
-        skipped = []
-        for path, sha1 in sorted(jars.items()):
-            project = projects.get((versions.get(sha1) or {}).get("project_id"), {})
-            if project.get("server_side") == "unsupported":
-                del kept[path]
-                skipped.append(f"{project.get('title') or path} ({path})")
+
+        def project_of(sha1: str) -> dict:
+            return projects.get((versions.get(sha1) or {}).get("project_id"), {})
+
+        excluded = dict(client_jars)
+        excluded.update({path: sha1 for path, sha1 in jars.items()
+                         if project_of(sha1).get("server_side") == "unsupported"})
+        required = self._required_libraries(
+            {sha1 for path, sha1 in jars.items() if path not in excluded}, excluded, versions)
+
+        kept = {path: sha1 for path, sha1 in hashes.items()
+                if path not in excluded or path in required}
+        kept.update({path: client_jars[path] for path in sorted(required) if path in client_jars})
+        label = {path: f"{project_of(sha1).get('title') or path} ({path})"
+                 for path, sha1 in excluded.items()}
+        skipped = [label[p] for p in sorted(excluded) if p in jars and p not in required]
         if skipped:
             noun = "mod" if len(skipped) == 1 else "mods"
             job.warnings.append(f"Skipped {len(skipped)} client-only {noun} (not needed on a "
                                 f"server): {', '.join(skipped)}.")
+        if required:
+            noun, pronoun = ("mod", "it") if len(required) == 1 else ("mods", "them")
+            job.warnings.append(
+                f"Kept {len(required)} {noun} marked client-only because server mods require "
+                f"{pronoun}: {', '.join(label[p] for p in required)}.")
         return kept
+
+    @staticmethod
+    def _required_libraries(kept_sha1s: set[str], excluded: dict[str, str],
+                            versions: dict[str, dict]) -> list[str]:
+        """Excluded jars a kept jar requires on Modrinth, directly or through each other."""
+        project_by_version = {v.get("id"): v.get("project_id") for v in versions.values()}
+        excluded_by_project: dict[str, list[str]] = {}
+        for path, sha1 in sorted(excluded.items()):
+            if sha1 in versions:
+                excluded_by_project.setdefault(versions[sha1]["project_id"], []).append(path)
+        required: list[str] = []
+        pending = sorted(kept_sha1s)
+        while pending:
+            for dependency in (versions.get(pending.pop(0)) or {}).get("dependencies") or []:
+                if dependency.get("dependency_type") != "required":
+                    continue
+                project_id = (dependency.get("project_id")
+                              or project_by_version.get(dependency.get("version_id")))
+                for path in excluded_by_project.pop(project_id, []):
+                    required.append(path)
+                    pending.append(excluded[path])
+        return required

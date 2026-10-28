@@ -178,7 +178,7 @@ class ModpackServerCreator:
 
         # Decide what to keep before downloading, so client-only mods are never fetched.
         kept = await self._packs.drop_client_only(
-            job, await self._packs.file_hashes(index, pack_path))
+            job, index, await self._packs.file_hashes(index, pack_path))
         files = await self._packs.fetch_files(job, index, pack_path, set(kept), workdir)
         pack_path.unlink(missing_ok=True)
         return files, kept
