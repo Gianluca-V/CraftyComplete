@@ -502,8 +502,8 @@ class ModInstaller:
                     needs[mod.file_name].add(target)
         return needs
 
-    async def _plan_removal(self, server: AdoptedServer, mod: InstalledMod) -> dict:
-        needs = await self._requirements(server)
+    async def _plan_removal(self, server: AdoptedServer, mod: InstalledMod,
+                            needs: dict[str, set[str]]) -> dict:
         titles = {m.file_name: m.title or m.file_name for m in server.mods}
         required_by = sorted(f for f, deps in needs.items() if mod.file_name in deps)
         # Mods installed as dependencies of what leaves that nothing staying requires,
@@ -536,7 +536,8 @@ class ModInstaller:
     async def removal_plan(self, token: str, server_id: str, file_name: str) -> dict:
         """What removing a mod affects: mods that require it and dependencies left unused."""
         server = await self._adopted(token, server_id)
-        return await self._plan_removal(server, self._mod(server, file_name))
+        return await self._plan_removal(server, self._mod(server, file_name),
+                                        await self._requirements(server))
 
     async def remove(self, token: str, server_id: str, file_name: str, force: bool,
                      remove_dependencies: list[str]) -> dict:
@@ -548,7 +549,8 @@ class ModInstaller:
         async with self._locks(server_id):
             server = await self._adopted(token, server_id)
             mod = self._mod(server, file_name)
-            plan = await self._plan_removal(server, mod)
+            needs = await self._requirements(server)
+            plan = await self._plan_removal(server, mod, needs)
             if plan["required_by"] and not force:
                 names = ", ".join(m["title"] for m in plan["required_by"])
                 raise ModOperationError(
@@ -559,6 +561,15 @@ class ModInstaller:
                     raise ModOperationError(409, f"{name} is not an unused dependency of "
                                                  f"{plan['title']}; review the removal again.")
             titles = {m.file_name: m.title or m.file_name for m in server.mods}
+            # The plan assumes every offered dependency leaves; a subset must not strand
+            # a mod that stays.
+            leaving = {file_name, *remove_dependencies}
+            for name in remove_dependencies:
+                users = sorted(f for f in set(needs) - leaving if name in needs[f])
+                if users:
+                    others = ", ".join(titles[f] for f in users)
+                    raise ModOperationError(409, f"{titles[name]} is still required by {others}; "
+                                                 f"remove {others} too, or keep {titles[name]}.")
             removed = []
             for name in [file_name, *dict.fromkeys(remove_dependencies)]:
                 try:

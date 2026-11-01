@@ -16,6 +16,15 @@ PROJECTS["PC"] = {"id": "PC", "slug": "shares-cloth", "title": "Shares Cloth",
 BYTES["sc-1"] = b"shares-cloth"
 VERSIONS_BY_ID["sc-1"] = version("sc-1", "PC", "1.0", "shares-cloth-1.0.jar", BYTES["sc-1"],
                                  deps=[dep("P4")])
+# A chain: Tee requires You, You requires Dub.
+for pid, slug, title in (("PT", "tee", "Tee"), ("PY", "you", "You"), ("PD", "dub", "Dub")):
+    PROJECTS[pid] = {"id": pid, "slug": slug, "title": title, "server_side": "required",
+                     "client_side": "required", "project_type": "mod", "icon_url": None}
+for vid, pid, name, deps in (("te-1", "PT", "tee-1.0.jar", [dep("PY")]),
+                             ("yo-1", "PY", "you-1.0.jar", [dep("PD")]),
+                             ("du-1", "PD", "dub-1.0.jar", [])):
+    BYTES[vid] = name.encode()
+    VERSIONS_BY_ID[vid] = version(vid, pid, "1.0", name, BYTES[vid], deps=deps)
 
 
 class Services(FakeServices):
@@ -28,8 +37,9 @@ class Services(FakeServices):
             return httpx.Response(200, json=[VERSIONS_BY_ID[i] for i in ids
                                              if i in VERSIONS_BY_ID])
         parts = path.split("/")
-        if len(parts) == 5 and parts[3] == "PC" and parts[4] == "version":
-            return httpx.Response(200, json=[VERSIONS_BY_ID["sc-1"]])
+        if len(parts) == 5 and parts[3] in ("PC", "PT", "PY", "PD") and parts[4] == "version":
+            return httpx.Response(200, json=[v for v in VERSIONS_BY_ID.values()
+                                             if v["project_id"] == parts[3]])
         return super()._modrinth(request)
 
 
@@ -149,6 +159,39 @@ def test_dependency_not_in_the_plan_is_refused_and_nothing_is_deleted(session, f
                                          "of Lithium; review the removal again."}
     assert "mods/lithium-0.11.2.jar" in fakes.files
     assert fakes.deletes() == []
+
+
+def test_transitive_unused_dependencies_are_offered(session):
+    install(session, "PT")
+
+    body = removal(session, "tee-1.0.jar").json()
+
+    assert [m["file_name"] for m in body["unused_dependencies"]] == ["you-1.0.jar",
+                                                                    "dub-1.0.jar"]
+
+
+def test_dependency_a_staying_mod_still_requires_is_refused(session, fakes):
+    """Ticking only Dub would leave You, which requires it, without its dependency."""
+    install(session, "PT")
+
+    response = remove(session, "tee-1.0.jar", remove_dependencies=["dub-1.0.jar"])
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Dub is still required by You; remove You too, "
+                                         "or keep Dub."}
+    assert "mods/tee-1.0.jar" in fakes.files
+    assert "mods/dub-1.0.jar" in fakes.files
+    assert fakes.deletes() == []
+
+
+def test_removing_a_dependency_together_with_the_mods_needing_it_works(session, fakes):
+    install(session, "PT")
+
+    response = remove(session, "tee-1.0.jar", remove_dependencies=["dub-1.0.jar", "you-1.0.jar"])
+
+    assert response.status_code == 200
+    assert {m["file_name"] for m in response.json()["removed"]} == {
+        "tee-1.0.jar", "you-1.0.jar", "dub-1.0.jar"}
 
 
 def test_removing_a_modpack_file_warns_that_an_update_brings_it_back(session, fakes):
