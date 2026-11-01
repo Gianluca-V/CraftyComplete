@@ -22,6 +22,38 @@
     <p id="power-error" class="error"></p>
   </section>
 
+  <details id="players-panel" class="players-panel">
+    <summary>Players</summary>
+    <p id="players-mode" class="muted"></p>
+    <form id="player-form" class="player-form">
+      <label class="inline-field">
+        Player name
+        <input id="player-name" required maxlength="16" pattern="[A-Za-z0-9_]{1,16}" autocomplete="off">
+      </label>
+      <label class="inline-field">
+        Action
+        <select id="player-action">
+          <option value="whitelist_add">Add to whitelist</option>
+          <option value="op">Make operator</option>
+          <option value="ban">Ban</option>
+          <option value="kick">Kick</option>
+        </select>
+      </label>
+      <label class="inline-field" id="player-reason-field" hidden>
+        Reason
+        <input id="player-reason" maxlength="200" autocomplete="off">
+      </label>
+      <button class="primary compact">Apply</button>
+    </form>
+    <p id="players-error" class="error"></p>
+    <div class="player-lists">
+      <section><h3>Online</h3><ul id="players-online" class="player-list"></ul></section>
+      <section><h3>Whitelist</h3><ul id="players-whitelist" class="player-list"></ul></section>
+      <section><h3>Operators</h3><ul id="players-ops" class="player-list"></ul></section>
+      <section><h3>Banned</h3><ul id="players-banned" class="player-list"></ul></section>
+    </div>
+  </details>
+
   <section class="toolbar" aria-label="Scan settings">
     <label class="inline-field">
       Loader
@@ -119,4 +151,5 @@
 <script src="{{ url_for('static', path='server.js') }}"></script>
 <script src="{{ url_for('static', path='server_control.js') }}"></script>
 <script src="{{ url_for('static', path='server_mod_actions.js') }}"></script>
+<script src="{{ url_for('static', path='server_players.js') }}"></script>
 {% endblock %}

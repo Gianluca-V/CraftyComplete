@@ -409,3 +409,28 @@ input[type="search"]:focus, select:focus, button:focus-visible {
 .mod-dialog .error { color: var(--danger); margin: 8px 0 0; }
 .mod-dialog .error:empty { display: none; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+.players-panel {
+  margin: 16px 0;
+  padding: 14px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.players-panel summary { cursor: pointer; font-weight: 600; }
+.players-panel[open] summary { margin-bottom: 10px; }
+.players-panel .error { color: var(--danger); margin: 8px 0 0; }
+.players-panel .error:empty { display: none; }
+.player-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+.player-form input { min-width: 0; width: 180px; max-width: 100%; }
+.player-lists {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px 20px;
+  margin-top: 14px;
+}
+.player-lists h3 { margin: 0 0 6px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.player-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.player-list li { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.player-list .player-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.player-list .empty { color: var(--muted); }

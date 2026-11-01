@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     # Modrinth asks every client to send a uniquely identifying User-Agent.
     user_agent: str = f"craftyComplete/{__version__}"
     http_timeout_seconds: float = 10.0
+    # Resolves player names to UUIDs when editing the player files of a stopped server.
+    mojang_url: str = "https://api.mojang.com"
 
     # SQLite file holding adopted servers and their mods.
     database_path: str = "crafty_complete.sqlite3"

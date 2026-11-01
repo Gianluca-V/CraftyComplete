@@ -3,13 +3,12 @@ from pydantic import BaseModel
 
 from crafty_complete.auth.sessions import Session
 from crafty_complete.crafty.client import CraftyError
-from crafty_complete.servers.control import NEEDS_IDLE_SERVER, PowerAction, ServerControl
+from crafty_complete.servers.control import (COMMANDS_FORBIDDEN, NEEDS_IDLE_SERVER, PowerAction,
+                                             ServerControl)
 from crafty_complete.web.deps import crafty_failure, require_crafty, require_session
 from crafty_complete.web.server_routes import ServerId
 
 router = APIRouter(prefix="/api/servers")
-
-COMMANDS_FORBIDDEN = "You do not have permission to control this server in Crafty."
 
 
 class PowerRequest(BaseModel):

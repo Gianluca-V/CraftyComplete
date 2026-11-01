@@ -273,6 +273,42 @@ class CraftyClient:
     async def server_stats(self, token: str, server_id: str) -> dict[str, Any]:
         return await self._get(f"/api/v2/servers/{server_id}/stats", token) or {}
 
+    async def send_command(self, token: str, server_id: str, command: str) -> None:
+        """Type one console command into a running server. Needs the COMMANDS permission."""
+        try:
+            response = await self._http.post(
+                f"/api/v2/servers/{server_id}/stdin", content=command.encode(),
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "text/plain"},
+            )
+        except httpx.HTTPError as exc:
+            raise CraftyError("unreachable", str(exc)) from exc
+        body = _json(response)
+        if response.status_code >= 400 or body.get("status") != "ok":
+            self._raise_for(response, body)
+
+    async def read_file(self, token: str, server_id: str, path: str,
+                        max_bytes: int = 4 * 1024 * 1024) -> bytes | None:
+        """A small server file's content, or None when it does not exist."""
+        data = bytearray()
+        try:
+            async with self._http.stream(
+                "GET", self._download_url(server_id, path),
+                headers={"Authorization": f"Bearer {token}"},
+            ) as response:
+                if response.status_code >= 400:
+                    await response.aread()
+                    body = _json(response)
+                    if response.status_code == 404 and body.get("error") == FILE_NOT_FOUND:
+                        return None
+                    self._raise_for(response, body)
+                async for chunk in response.aiter_bytes():
+                    data.extend(chunk)
+                    if len(data) > max_bytes:
+                        raise CraftyError("error", f"{path} is larger than {max_bytes} bytes")
+        except httpx.HTTPError as exc:
+            raise CraftyError("unreachable", str(exc)) from exc
+        return bytes(data)
+
     async def server_action(self, token: str, server_id: str, action: str) -> None:
         """Run a Crafty server action such as start_server. Needs the COMMANDS permission."""
         await self._request("POST", f"/api/v2/servers/{server_id}/action/{action}", token)

@@ -25,6 +25,8 @@ Changed mods load the next time the server starts: restart it from Crafty or fro
 
 The **Servers** list shows whether each server is running and how many players are online. The server page shows its state (running, stopped, starting, updating or crashed), the players online, CPU and memory use, Minecraft version, world size and port, refreshed every 10 seconds, with **Start**, **Restart**, **Stop** and **Kill** buttons. These need Crafty's Commands permission on that server. Start and Restart are refused while a modpack update is changing the server's files.
 
+The **Players** panel on the server page lists who is online, the whitelist, the operators and the banned players, and adds or removes players from each list (whitelist, op/deop, ban/pardon) or kicks them. While the server runs, changes are sent as console commands (Crafty's Commands permission). While it is stopped, craftyComplete edits `whitelist.json`, `ops.json` and `banned-players.json` (Files permission) and the change applies on the next start; new entries get the player's UUID from Mojang, or the offline UUID when `server.properties` sets `online-mode=false`. Kick needs a running server.
+
 To **create a server from a modpack**, open the Modpacks tab, press **Create server** on a Fabric, Forge or NeoForge pack, choose a version, name, port and memory, and accept the Minecraft EULA. craftyComplete then, in the background:
 
 1. downloads the `.mrpack` and every server file it lists, checking each against the pack's SHA-1/SHA-512, and drops mods Modrinth marks as client-only (nothing is created in Crafty if any of this fails);

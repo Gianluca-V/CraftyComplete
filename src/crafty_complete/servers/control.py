@@ -12,6 +12,8 @@ class PowerAction(str, Enum):
     KILL = "kill"
 
 
+COMMANDS_FORBIDDEN = "You do not have permission to control this server in Crafty."
+
 # Starting while a modpack update moves files would load a half-updated server.
 NEEDS_IDLE_SERVER = {PowerAction.START, PowerAction.RESTART}
 

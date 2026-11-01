@@ -18,6 +18,7 @@ from crafty_complete.crafty.client import CookielessTransport, CraftyClient, Cra
 from crafty_complete.web.auth_routes import router as auth_router
 from crafty_complete.web.catalog_routes import router as catalog_router
 from crafty_complete.web.control_routes import router as control_router
+from crafty_complete.web.player_routes import router as player_router
 from crafty_complete.mods.adoption import AdoptionService
 from crafty_complete.mods.installer import ModInstaller
 from crafty_complete.mods.locks import ServerLocks
@@ -27,6 +28,7 @@ from crafty_complete.modpacks.creator import ModpackServerCreator
 from crafty_complete.modpacks.jobs import JobRegistry
 from crafty_complete.modpacks.linker import ModpackLinker
 from crafty_complete.modpacks.updater import ModpackUpdater
+from crafty_complete.players.service import PlayerService
 from crafty_complete.servers.control import ServerControl
 from crafty_complete.web.modpack_routes import ProjectRef
 from crafty_complete.web.modpack_routes import router as modpack_router
@@ -54,6 +56,12 @@ def create_app(
             transport=transport,
         )
         app.state.catalog = ModrinthProvider(modrinth_http)
+        mojang_http = httpx.AsyncClient(
+            base_url=settings.mojang_url,
+            headers={"User-Agent": settings.user_agent},
+            timeout=settings.http_timeout_seconds,
+            transport=transport,
+        )
 
         crafty_http = None
         if settings.crafty_url:
@@ -86,6 +94,7 @@ def create_app(
             app.state.crafty, app.state.catalog, app.state.modpack_linker, adoption, store,
             locks, settings)
         app.state.control = ServerControl(app.state.crafty)
+        app.state.players = PlayerService(app.state.crafty, mojang_http, locks)
         app.state.jobs = JobRegistry()
         checker.start()
         yield
@@ -93,6 +102,7 @@ def create_app(
         await checker.stop()
         store.close()
         await modrinth_http.aclose()
+        await mojang_http.aclose()
         if crafty_http:
             await crafty_http.aclose()
 
@@ -111,6 +121,7 @@ def create_app(
     app.include_router(catalog_router, dependencies=[Depends(require_session)])
     app.include_router(server_router)
     app.include_router(control_router)
+    app.include_router(player_router)
     app.include_router(modpack_router)
 
     def page(request: Request, template: str, **context):
