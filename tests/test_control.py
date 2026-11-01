@@ -150,3 +150,16 @@ def test_power_needs_a_json_body():
                                headers={"content-type": "text/plain"})
 
     assert response.status_code == 422
+
+
+def test_crafty_false_placeholders_become_null():
+    """Seen on a real Crafty 4: a stopped or booting server reports "False" for unknowns."""
+    stats = {**STATS, "running": False, "online": 0, "players": "[]", "max": 0,
+             "started": "False", "version": "False", "mem": 0, "cpu": 0, "mem_percent": 0}
+    with client_for(FakeCrafty(stats=stats)) as client:
+        body = client.get(f"/api/servers/{SERVER}/status").json()
+
+    assert body["started"] is None
+    assert body["version"] is None
+    assert body["memory"] is None
+    assert body["cpu_percent"] == 0

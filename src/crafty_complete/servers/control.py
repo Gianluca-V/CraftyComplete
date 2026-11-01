@@ -40,6 +40,11 @@ def _state(stats: dict[str, Any]) -> str:
     return "stopped"
 
 
+def _known(value: Any) -> Any:
+    """Crafty writes "False" (or 0 for memory) where it has no value yet; that means unknown."""
+    return None if value in ("False", False, "", 0) else value
+
+
 def server_status(stats: dict[str, Any]) -> dict[str, Any]:
     """The parts of Crafty's server stats a person or an agent needs."""
     return {
@@ -49,11 +54,11 @@ def server_status(stats: dict[str, Any]) -> dict[str, Any]:
         "max_players": int(stats.get("max") or 0),
         "players": _players(stats.get("players")),
         "cpu_percent": stats.get("cpu"),
-        "memory": stats.get("mem"),
+        "memory": _known(stats.get("mem")),
         "memory_percent": stats.get("mem_percent"),
-        "started": stats.get("started"),
-        "version": stats.get("version"),
-        "world_size": stats.get("world_size"),
+        "started": _known(stats.get("started")),
+        "version": _known(stats.get("version")),
+        "world_size": _known(stats.get("world_size")),
         "port": stats.get("server_port"),
     }
 
