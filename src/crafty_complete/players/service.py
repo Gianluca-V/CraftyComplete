@@ -47,7 +47,7 @@ FILE_EDITS = {
 # Matches what vanilla writes for a ban made from the console.
 DEFAULT_BAN_REASON = "Banned by an operator."
 # Player names and reasons are typed into the server console: no line breaks or controls.
-PLAYER_NAME = re.compile(r"^[A-Za-z0-9_]{1,16}$")
+PLAYER_NAME = re.compile(r"[A-Za-z0-9_]{1,16}")
 UNSAFE_REASON = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 REASON_ACTIONS = {PlayerAction.BAN, PlayerAction.KICK}
 
@@ -124,7 +124,7 @@ class PlayerService:
 
     async def apply(self, token: str, server_id: str, action: PlayerAction, name: str,
                     reason: str | None = None) -> dict[str, Any]:
-        if not PLAYER_NAME.match(name):
+        if not PLAYER_NAME.fullmatch(name):
             raise PlayerError(422, f"{name!r} is not a valid Minecraft player name.")
         reason = (reason or "").strip() or None
         if reason and action not in REASON_ACTIONS:

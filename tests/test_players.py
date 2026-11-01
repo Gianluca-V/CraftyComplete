@@ -351,3 +351,20 @@ def test_a_reason_is_only_accepted_for_ban_and_kick():
     assert response.json() == {"detail": "A reason only applies to ban and kick."}
     assert world.commands == []
 
+
+
+def test_the_service_itself_refuses_a_name_with_a_trailing_newline():
+    """Callers other than the web route (the MCP) rely on the service's own check."""
+    import asyncio
+
+    from crafty_complete.players.service import PlayerAction, PlayerError, PlayerService
+
+    class NoCrafty:
+        def __getattr__(self, name):
+            raise AssertionError("Crafty must not be called")
+
+    service = PlayerService(NoCrafty(), None, None)
+    with pytest.raises(PlayerError) as raised:
+        asyncio.run(service.apply("t", SERVER, PlayerAction.OP, "Steve\n"))
+
+    assert raised.value.status_code == 422
