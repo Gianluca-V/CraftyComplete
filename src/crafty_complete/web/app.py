@@ -87,7 +87,7 @@ def create_app(
         installer = app.state.installer = ModInstaller(
             app.state.crafty, app.state.catalog, store, adoption, locks)
         app.state.server_creator = ServerCreator(
-            app.state.crafty, adoption, installer, locks, settings)
+            app.state.crafty, adoption, installer, store, locks, settings)
         checker = app.state.update_checker = UpdateChecker(
             adoption, store, settings.update_check_hours)
         app.state.modpack_creator = ModpackServerCreator(

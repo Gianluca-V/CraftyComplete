@@ -233,3 +233,20 @@ def test_unknown_kind_is_rejected(tmp_path, db):
     client.__exit__(None, None, None)
 
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize("order", [["lithium", "fabric-api"], ["fabric-api", "lithium"]])
+def test_a_chosen_mod_is_never_marked_as_a_dependency(tmp_path, db, order):
+    """Fabric API is also a dependency of Lithium; the user chose it, so it is theirs."""
+    job, mods = run(Fakes(), db, tmp_path, mods=order)
+
+    assert job["status"] == "succeeded", job
+    assert {m["file_name"]: m["dependency"] for m in mods["mods"]} == {
+        "lithium-0.11.2.jar": False, "fabric-api-0.92.12.jar": False,
+        "cloth-config-11.1.jar": True}
+
+
+def test_duplicates_do_not_count_towards_the_mod_limit(tmp_path, db):
+    job, _ = run(Fakes(), db, tmp_path, mods=["lithium"] * 51)
+
+    assert job["status"] == "succeeded", job

@@ -186,6 +186,14 @@ class AdoptionStore:
                 [(server_id, path, sha1) for path, sha1 in files.items()],
             )
 
+    def mark_chosen(self, server_id: str, project_ids: list[str]) -> None:
+        """The user chose these projects themselves: they are not automatic dependencies."""
+        with self._lock, self._db:
+            self._db.executemany(
+                "UPDATE server_mods SET dependency = 0 WHERE server_id = ? AND project_id = ?",
+                [(server_id, project_id) for project_id in project_ids],
+            )
+
     def set_pinned(self, server_id: str, file_name: str, pinned: bool) -> InstalledMod | None:
         with self._lock, self._db:
             updated = self._db.execute(

@@ -11,6 +11,7 @@ from crafty_complete.modpacks.transfer import ServerWriter
 from crafty_complete.mods.adoption import MODS_DIR, AdoptionService
 from crafty_complete.mods.installer import ModInstaller, ModOperationError
 from crafty_complete.mods.locks import ServerLocks
+from crafty_complete.mods.store import AdoptionStore
 from crafty_complete.servers.provision import NewServer, catalog_versions, create_and_install
 
 
@@ -61,10 +62,12 @@ class ServerCreator:
     """
 
     def __init__(self, crafty: CraftyClient, adoption: AdoptionService,
-                 installer: ModInstaller, locks: ServerLocks, settings: Settings):
+                 installer: ModInstaller, store: AdoptionStore, locks: ServerLocks,
+                 settings: Settings):
         self._crafty = crafty
         self._adoption = adoption
         self._installer = installer
+        self._store = store
         self._locks = locks
         self._settings = settings
         self._writer = ServerWriter(crafty, settings)
@@ -88,14 +91,15 @@ class ServerCreator:
         if request.mods and not kind.modded:
             raise CreationRefused(422, f"{kind.label} servers cannot have mods; choose Fabric, "
                                        "Forge or NeoForge.")
-        if len(request.mods) > MAX_MODS:
+        refs = list(dict.fromkeys(request.mods))
+        if len(refs) > MAX_MODS:
             raise CreationRefused(422, f"Choose at most {MAX_MODS} mods.")
         catalog = await self._crafty.jar_catalog(token)
         if request.minecraft not in catalog_versions(catalog, kind.crafty_type):
             raise CreationRefused(422, f"Crafty cannot install {kind.label} for Minecraft "
                                        f"{request.minecraft}.")
         mods: dict[str, dict[str, Any]] = {}
-        for ref in request.mods:
+        for ref in refs:
             try:
                 project = await self._installer.check_installable(
                     ref, request.kind, request.minecraft)
@@ -132,6 +136,12 @@ class ServerCreator:
             if project["id"] not in already:
                 installed.extend(await self._install(job, token, project))
             job.done += 1
+        # A chosen mod that an earlier choice pulled in as a dependency is the user's own.
+        async with self._locks(job.server_id):
+            self._store.mark_chosen(job.server_id, [project["id"] for project in prepared.mods])
+        for item in installed:
+            if any(item["project_id"] == project["id"] for project in prepared.mods):
+                item["dependency"] = False
         job.result = {"installed": installed}
 
     async def _install(self, job: Job, token: str, project: dict[str, Any]) -> list[dict]:
