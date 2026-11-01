@@ -18,7 +18,7 @@ Open http://localhost:8500, log in with your Crafty account and browse Modrinth 
 - **Install** a mod from the browse page (pick the server under "Install to"); its missing required dependencies are installed too.
 - **Update** one mod, or **Update all** unpinned mods, from the server page.
 - **Version** installs another version of a mod, chosen from the versions that fit the server's loader and Minecraft version (missing required dependencies are installed too). The chosen version is not pinned, so **Update all** can move it to the newest one again.
-- **Remove** deletes a mod. If other mods require it, you have to confirm. Dependencies craftyComplete installed for it that no other mod needs are listed, and removed only if you tick them. Mods you added yourself are never offered. Removing a mod of the linked modpack warns that the next modpack update adds it back.
+- **Remove** deletes a mod. If other mods require it, you have to confirm. Dependencies craftyComplete installed for it that no other mod needs are listed, and removed only if you tick them. Mods you added yourself are never offered. Removing a mod of the linked modpack warns that the next modpack update adds it back. When Modrinth cannot be reached, required-by checks are skipped, no dependencies are offered and the removal needs confirmation. A jar already deleted outside craftyComplete is just dropped from the list.
 - **Check for updates** refreshes the "update available" badges; this also runs in the background. Nothing is ever updated without you pressing a button.
 
 Changed mods load the next time the server starts: restart it from Crafty or from the server page.

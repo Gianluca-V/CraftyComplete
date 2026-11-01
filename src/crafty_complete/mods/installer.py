@@ -113,6 +113,11 @@ def _safe_file_name(name: str) -> bool:
             and len(name) <= 255 and name.isascii() and name.isprintable())
 
 
+def _unchecked_removal(title: str) -> str:
+    return (f"Modrinth is unreachable, so the mods that need {title} could not be checked. "
+            "Confirm to remove it anyway.")
+
+
 UNSAFE_NAME_REASON = ("Its file name cannot be sent to Crafty; download it yourself and "
                       "upload it to mods/.")
 
@@ -486,11 +491,17 @@ class ModInstaller:
 
     # --- remove ---------------------------------------------------------------
 
-    async def _requirements(self, server: AdoptedServer) -> dict[str, set[str]]:
-        """For each installed mod, the installed mods its version requires (by file name)."""
+    async def _requirements(self, server: AdoptedServer) -> dict[str, set[str]] | None:
+        """For each installed mod, the installed mods its version requires (by file name).
+
+        None when Modrinth cannot be asked, so removals still work without it.
+        """
         by_project = {m.project_id: m.file_name for m in server.mods if m.project_id}
         by_version = {m.version_id: m.file_name for m in server.mods if m.version_id}
-        versions = await self._modrinth.versions(sorted(by_version)) if by_version else {}
+        try:
+            versions = await self._modrinth.versions(sorted(by_version)) if by_version else {}
+        except CatalogError:
+            return None
         needs: dict[str, set[str]] = {m.file_name: set() for m in server.mods}
         for mod in server.mods:
             for dep in (versions.get(mod.version_id) or {}).get("dependencies") or []:
@@ -503,8 +514,17 @@ class ModInstaller:
         return needs
 
     async def _plan_removal(self, server: AdoptedServer, mod: InstalledMod,
-                            needs: dict[str, set[str]]) -> dict:
+                            needs: dict[str, set[str]] | None) -> dict:
         titles = {m.file_name: m.title or m.file_name for m in server.mods}
+        warnings = []
+        if f"{MODS_DIR}/{mod.file_name}" in self._store.get_modpack_files(server.server_id):
+            warnings.append(f"{titles[mod.file_name]} is part of the linked modpack; "
+                            "a modpack update adds it back.")
+        if needs is None:
+            warnings.append(_unchecked_removal(titles[mod.file_name]))
+            return {"file_name": mod.file_name, "title": titles[mod.file_name],
+                    "required_by": [], "unused_dependencies": [], "warnings": warnings,
+                    "requirements_checked": False}
         required_by = sorted(f for f, deps in needs.items() if mod.file_name in deps)
         # Mods installed as dependencies of what leaves that nothing staying requires,
         # followed transitively. Mods the user added themselves are never offered.
@@ -521,16 +541,13 @@ class ModInstaller:
                     leaving.add(candidate)
                     unused.append(candidate)
                     changed = True
-        warnings = []
-        if f"{MODS_DIR}/{mod.file_name}" in self._store.get_modpack_files(server.server_id):
-            warnings.append(f"{titles[mod.file_name]} is part of the linked modpack; "
-                            "a modpack update adds it back.")
         return {
             "file_name": mod.file_name,
             "title": titles[mod.file_name],
             "required_by": [{"file_name": f, "title": titles[f]} for f in required_by],
             "unused_dependencies": [{"file_name": f, "title": titles[f]} for f in unused],
             "warnings": warnings,
+            "requirements_checked": True,
         }
 
     async def removal_plan(self, token: str, server_id: str, file_name: str) -> dict:
@@ -551,6 +568,8 @@ class ModInstaller:
             mod = self._mod(server, file_name)
             needs = await self._requirements(server)
             plan = await self._plan_removal(server, mod, needs)
+            if needs is None and not force:
+                raise ModOperationError(409, _unchecked_removal(plan["title"]))
             if plan["required_by"] and not force:
                 names = ", ".join(m["title"] for m in plan["required_by"])
                 raise ModOperationError(
@@ -565,13 +584,20 @@ class ModInstaller:
             # a mod that stays.
             leaving = {file_name, *remove_dependencies}
             for name in remove_dependencies:
+                # Only offered dependencies get here, so `needs` is known.
                 users = sorted(f for f in set(needs) - leaving if name in needs[f])
                 if users:
                     others = ", ".join(titles[f] for f in users)
                     raise ModOperationError(409, f"{titles[name]} is still required by {others}; "
                                                  f"remove {others} too, or keep {titles[name]}.")
             removed = []
+            present = {e.name for e in await self._crafty.list_dir(token, server_id, MODS_DIR)}
             for name in [file_name, *dict.fromkeys(remove_dependencies)]:
+                if name not in present:
+                    # Deleted outside craftyComplete; only the record is left.
+                    self._store.remove_mod(server_id, name)
+                    removed.append({"file_name": name, "title": titles[name]})
+                    continue
                 try:
                     await self._crafty.delete_file(token, server_id, f"{MODS_DIR}/{name}")
                 except CraftyError as exc:

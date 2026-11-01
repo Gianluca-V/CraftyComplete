@@ -87,7 +87,7 @@ function showOutcome(container, outcome) {
   container.replaceChildren(el("ul", {}, ...lines));
   if (outcome.restart_required) {
     container.append(el("p", { class: "restart" },
-      "Restart the server to load the changes."));
+      "Restart the server (from its page here or in Crafty) to load the changes."));
   }
   container.hidden = false;
 }

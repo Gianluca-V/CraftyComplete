@@ -95,6 +95,9 @@ async function openRemoveDialog(mod) {
     body.push(el("p", { class: "warn" },
       `Required by ${plan.required_by.map((m) => m.title).join(", ")}. `
       + "Those mods may fail to load without it."));
+  }
+  // Also when Modrinth could not be asked: the server then refuses without confirmation.
+  if (plan.required_by.length || !plan.requirements_checked) {
     force = el("input", { type: "checkbox", id: "remove-force" });
     body.push(el("label", { class: "dialog-check", for: "remove-force" }, force, "Remove it anyway"));
   }
@@ -106,7 +109,7 @@ async function openRemoveDialog(mod) {
   });
   openDialog(`Remove ${title}?`, "Remove", body, () => {
     if (force && !force.checked) {
-      return Promise.reject(new Error("Tick \"Remove it anyway\" to remove a required mod."));
+      return Promise.reject(new Error("Tick \"Remove it anyway\" to confirm."));
     }
     return postFromDialog(`${path}/remove`, {
       force: Boolean(force?.checked),

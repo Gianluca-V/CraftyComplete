@@ -32,6 +32,8 @@ class Services(FakeServices):
 
     def _modrinth(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
+        if self.modrinth_down:
+            return httpx.Response(503)
         if path == "/v2/versions":
             ids = json.loads(request.url.params["ids"])
             return httpx.Response(200, json=[VERSIONS_BY_ID[i] for i in ids
@@ -77,6 +79,7 @@ def test_removal_plan_lists_dependencies_nothing_else_needs(session):
         "required_by": [],
         "unused_dependencies": [{"file_name": "cloth-config-11.1.jar", "title": "Cloth Config"}],
         "warnings": [],
+        "requirements_checked": True,
     }
 
 
@@ -352,3 +355,46 @@ def test_updating_a_dependency_keeps_it_marked(session):
 
     assert session.mods()["lithium-0.11.1.jar"]["dependency"] is False
     assert session.mods()["cloth-config-11.1.jar"]["dependency"] is True
+
+
+# --- removal when Modrinth or the jar is missing ----------------------------------
+
+UNCHECKED = ("Modrinth is unreachable, so the mods that need Lithium could not be checked. "
+             "Confirm to remove it anyway.")
+
+
+def test_removal_plan_without_modrinth_asks_for_confirmation(session, fakes):
+    install(session, "P3")
+    fakes.modrinth_down = True
+
+    body = removal(session, "lithium-0.11.2.jar").json()
+
+    assert body["requirements_checked"] is False
+    assert body["required_by"] == []
+    assert body["unused_dependencies"] == []
+    assert body["warnings"] == [UNCHECKED]
+
+
+def test_remove_without_modrinth_needs_force_and_then_works(session, fakes):
+    install(session, "P3")
+    fakes.modrinth_down = True
+
+    refused = remove(session, "lithium-0.11.2.jar")
+    forced = remove(session, "lithium-0.11.2.jar", force=True)
+
+    assert refused.status_code == 409
+    assert refused.json() == {"detail": UNCHECKED}
+    assert forced.status_code == 200
+    assert "mods/lithium-0.11.2.jar" not in fakes.files
+
+
+def test_removing_a_mod_whose_jar_is_already_gone_drops_the_record(session, fakes):
+    install(session, "P3")
+    del fakes.files["mods/lithium-0.11.2.jar"]
+
+    response = remove(session, "lithium-0.11.2.jar")
+
+    assert response.status_code == 200
+    assert response.json()["removed"] == [{"file_name": "lithium-0.11.2.jar", "title": "Lithium"}]
+    assert fakes.deletes() == []
+    assert "lithium-0.11.2.jar" not in session.mods()
