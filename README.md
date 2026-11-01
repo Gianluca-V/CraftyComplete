@@ -19,7 +19,9 @@ Open http://localhost:8500, log in with your Crafty account and browse Modrinth 
 - **Update** one mod, or **Update all** unpinned mods, from the server page.
 - **Check for updates** refreshes the "update available" badges; this also runs in the background. Nothing is ever updated without you pressing a button.
 
-Changed mods load the next time the server starts: restart it from Crafty.
+Changed mods load the next time the server starts: restart it from Crafty or from the server page.
+
+The **Servers** list shows whether each server is running and how many players are online. The server page shows its state (running, stopped, starting, updating or crashed), the players online, CPU and memory use, Minecraft version, world size and port, refreshed every 10 seconds, with **Start**, **Restart**, **Stop** and **Kill** buttons. These need Crafty's Commands permission on that server. Start and Restart are refused while a modpack update is changing the server's files.
 
 To **create a server from a modpack**, open the Modpacks tab, press **Create server** on a Fabric, Forge or NeoForge pack, choose a version, name, port and memory, and accept the Minecraft EULA. craftyComplete then, in the background:
 

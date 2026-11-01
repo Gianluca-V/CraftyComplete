@@ -273,6 +273,10 @@ class CraftyClient:
     async def server_stats(self, token: str, server_id: str) -> dict[str, Any]:
         return await self._get(f"/api/v2/servers/{server_id}/stats", token) or {}
 
+    async def server_action(self, token: str, server_id: str, action: str) -> None:
+        """Run a Crafty server action such as start_server. Needs the COMMANDS permission."""
+        await self._request("POST", f"/api/v2/servers/{server_id}/action/{action}", token)
+
     async def delete_file(self, token: str, server_id: str, path: str) -> None:
         await self._request(
             "DELETE", f"/api/v2/servers/{server_id}/files", token,
