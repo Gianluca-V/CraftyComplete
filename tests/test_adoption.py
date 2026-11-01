@@ -189,6 +189,7 @@ def test_scan_identifies_mods_and_flags_updates(world, db):
         "latest_version_number": "0.92.12",
         "update_available": True,
         "pinned": False,
+        "dependency": False,
     }
     assert mods["sodium.jar"]["update_available"] is False
     assert mods["sodium.jar"]["server_side"] == "unsupported"

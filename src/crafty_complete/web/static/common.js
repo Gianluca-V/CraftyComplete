@@ -68,6 +68,12 @@ function showOutcome(container, outcome) {
     lines.push(el("li", { class: "ok" },
       `Updated ${item.title} ${item.from_version || ""} → ${item.to_version}`));
   }
+  for (const item of outcome.removed || []) {
+    lines.push(el("li", { class: "ok" }, `Removed ${item.title} (${item.file_name})`));
+  }
+  for (const warning of outcome.warnings || []) {
+    lines.push(el("li", { class: "warn" }, warning));
+  }
   for (const item of outcome.skipped || []) {
     const line = el("li", { class: "warn" }, `Skipped ${item.title}: ${item.reason}`);
     const url = safeUrl(item.url);
@@ -81,7 +87,7 @@ function showOutcome(container, outcome) {
   container.replaceChildren(el("ul", {}, ...lines));
   if (outcome.restart_required) {
     container.append(el("p", { class: "restart" },
-      "Restart the server in Crafty to load the changes."));
+      "Restart the server to load the changes."));
   }
   container.hidden = false;
 }

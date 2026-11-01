@@ -101,6 +101,14 @@ class ModrinthProvider:
     async def version(self, version_id: str) -> dict[str, Any]:
         return await self._get(f"version/{quote(version_id, safe='')}")
 
+    async def versions(self, ids: list[str]) -> dict[str, dict[str, Any]]:
+        """Versions by id; ids Modrinth does not know are absent."""
+        found: dict[str, dict[str, Any]] = {}
+        for batch in _chunks(ids, PROJECT_BATCH):
+            for item in await self._get("versions", params={"ids": json.dumps(batch)}):
+                found[item["id"]] = item
+        return found
+
     async def compatible_versions(self, project_id: str, loaders: list[str],
                                   game_version: str) -> list[dict[str, Any]]:
         """Versions of a project for these loaders and Minecraft version, newest first."""

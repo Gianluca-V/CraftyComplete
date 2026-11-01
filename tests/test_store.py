@@ -39,6 +39,7 @@ def test_version_1_database_is_migrated_in_place(tmp_path):
     assert server.loader == "fabric"
     assert server.updates_checked_at is None
     assert server.mods[0].pinned is True
+    assert server.mods[0].dependency is False
     assert refreshed.updates_checked_at == "2026-10-27T00:00:00+00:00"
     assert refreshed.mods[0].latest_version_id == "v2"
     version = sqlite3.connect(path).execute("PRAGMA user_version").fetchone()[0]

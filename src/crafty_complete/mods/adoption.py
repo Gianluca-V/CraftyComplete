@@ -126,9 +126,13 @@ class AdoptionService:
                 sorted(versions), compatible_loaders(loader), game_version
             )
 
-        # Re-read pins now: the user may have pinned something while Crafty and Modrinth
-        # were being queried.
-        pinned = {mod.pin_key for mod in self._store.get(server_id).mods if mod.pinned}
+        # Re-read pins (and which mods were installed as dependencies) now: the user may have
+        # pinned or installed something while Crafty and Modrinth were being queried.
+        stored = self._store.get(server_id).mods
+        pinned = {mod.pin_key for mod in stored if mod.pinned}
+        # By project and by exact file, so the mark survives Modrinth not identifying a jar.
+        dependencies = {key for mod in stored if mod.dependency
+                        for key in (mod.pin_key, f"sha1:{mod.sha1}")}
         mods = []
         for file_name, sha1 in hashes.items():
             version = versions.get(sha1)
@@ -152,6 +156,7 @@ class AdoptionService:
                     latest_version_number=newest.get("version_number"),
                 )
             mod.pinned = mod.pin_key in pinned
+            mod.dependency = bool({mod.pin_key, f"sha1:{sha1}"} & dependencies)
             mods.append(mod)
 
         link = modpack or {

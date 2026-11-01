@@ -118,7 +118,7 @@ UNSAFE_NAME_REASON = ("Its file name cannot be sent to Crafty; download it yours
 
 
 class ModInstaller:
-    """Install and update Modrinth mods on adopted Crafty servers."""
+    """Install, update, pick versions of and remove Modrinth mods on adopted Crafty servers."""
 
     def __init__(self, crafty: CraftyClient, modrinth: ModrinthProvider, store: AdoptionStore,
                  adoption: AdoptionService, locks: ServerLocks):
@@ -213,8 +213,11 @@ class ModInstaller:
         return data
 
     async def _write(self, token: str, server: AdoptedServer, item: Planned, data: bytes,
-                     existing: set[str], replaces: InstalledMod | None = None) -> InstalledMod:
+                     existing: set[str], replaces: InstalledMod | None = None,
+                     latest: dict[str, Any] | None = None) -> InstalledMod:
         """Upload one jar (replacing `replaces` if given) and record it.
+
+        `latest` is the newest compatible version to record, when it is not this one.
 
         The new jar is uploaded and recorded before the old one is deleted, so a failure
         never leaves the mod missing; if the delete fails, both jars stay recorded and a
@@ -223,6 +226,7 @@ class ModInstaller:
         name = item.file["filename"]
         old_name = replaces.file_name if replaces else None
         project, version = item.project, item.version
+        latest = latest or version
         already_uploaded = False
         if name != old_name and name in existing:
             recorded = next((m for m in self._store.get(server.server_id).mods
@@ -244,8 +248,9 @@ class ModInstaller:
             version_id=version["id"],
             version_number=version.get("version_number"),
             server_side=project.get("server_side"),
-            latest_version_id=version["id"],
-            latest_version_number=version.get("version_number"),
+            latest_version_id=latest["id"],
+            latest_version_number=latest.get("version_number"),
+            dependency=replaces.dependency if replaces else item.dependency,
         )
         # Same name: this overwrites the old record. Different name: the old record is only
         # removed once its jar is gone.
@@ -364,6 +369,13 @@ class ModInstaller:
         except CatalogNotFound as exc:
             raise ModOperationError(
                 502, f"Modrinth has no version {mod.latest_version_id}.") from exc
+        await self._replace(token, server, mod, version, outcome)
+
+    async def _replace(self, token: str, server: AdoptedServer, mod: InstalledMod,
+                       version: dict[str, Any], outcome: Outcome,
+                       latest: dict[str, Any] | None = None) -> None:
+        """Swap `mod`'s jar for `version`, installing that version's missing dependencies."""
+        title = mod.title or mod.file_name
         project = {"id": mod.project_id, "title": title, "slug": mod.slug,
                    "icon_url": mod.icon_url, "server_side": mod.server_side}
         item = Planned(project, version, _primary_file(version), dependency=False)
@@ -381,7 +393,7 @@ class ModInstaller:
         data = await self._download(item)
         await self._install_planned(token, server, list(planned_deps.values()), outcome)
         existing = {e.name for e in await self._crafty.list_dir(token, server.server_id, MODS_DIR)}
-        new = await self._write(token, server, item, data, existing, replaces=mod)
+        new = await self._write(token, server, item, data, existing, replaces=mod, latest=latest)
         outcome.updated.append(Updated(
             project_id=mod.project_id, title=title, from_version=mod.version_number,
             to_version=new.version_number, old_file_name=mod.file_name,
@@ -421,3 +433,148 @@ class ModInstaller:
                                              title=mod.title or mod.file_name,
                                              file_name=mod.file_name, reason=reason))
             return outcome.to_dict(self._store.get(server_id))
+
+    # --- pick a version -------------------------------------------------------
+
+    def _mod(self, server: AdoptedServer, file_name: str) -> InstalledMod:
+        mod = next((m for m in server.mods if m.file_name == file_name), None)
+        if mod is None:
+            raise ModOperationError(404, "No adopted mod with that file name.")
+        return mod
+
+    async def _versions_of(self, server: AdoptedServer,
+                           mod: InstalledMod) -> list[dict[str, Any]]:
+        if mod.state != "identified":
+            raise ModOperationError(
+                409, f"{mod.file_name} is not on Modrinth, so its version cannot be changed.")
+        return await self._modrinth.compatible_versions(
+            mod.project_id, compatible_loaders(server.loader), server.game_version)
+
+    async def versions(self, token: str, server_id: str, file_name: str) -> dict:
+        """Versions of an installed mod that fit the server's loader and Minecraft version."""
+        server = await self._adopted(token, server_id)
+        mod = self._mod(server, file_name)
+        versions = await self._versions_of(server, mod)
+        return {
+            "current_version_id": mod.version_id,
+            "versions": [{"id": v["id"], "version_number": v.get("version_number"),
+                          "version_type": v.get("version_type"),
+                          "date_published": v.get("date_published")} for v in versions],
+        }
+
+    async def set_version(self, token: str, server_id: str, file_name: str,
+                          version_id: str) -> dict:
+        """Install a chosen version of a mod. It is not pinned, so "Update all" can move it."""
+        async with self._locks(server_id):
+            server = await self._adopted(token, server_id)
+            mod = self._mod(server, file_name)
+            title = mod.title or mod.file_name
+            versions = await self._versions_of(server, mod)
+            if mod.pinned:
+                raise ModOperationError(409, f"{title} is pinned; unpin it to change its version.")
+            version = next((v for v in versions if v["id"] == version_id), None)
+            if version is None:
+                raise ModOperationError(422, f"{title} has no version {version_id} for "
+                                             f"{server.loader} {server.game_version}.")
+            if version_id == mod.version_id:
+                raise ModOperationError(
+                    409, f"{title} {mod.version_number} is already installed.")
+            outcome = Outcome()
+            await self._replace(token, server, mod, version, outcome,
+                                latest=_choose_version(versions))
+            return outcome.to_dict(self._store.get(server_id))
+
+    # --- remove ---------------------------------------------------------------
+
+    async def _requirements(self, server: AdoptedServer) -> dict[str, set[str]]:
+        """For each installed mod, the installed mods its version requires (by file name)."""
+        by_project = {m.project_id: m.file_name for m in server.mods if m.project_id}
+        by_version = {m.version_id: m.file_name for m in server.mods if m.version_id}
+        versions = await self._modrinth.versions(sorted(by_version)) if by_version else {}
+        needs: dict[str, set[str]] = {m.file_name: set() for m in server.mods}
+        for mod in server.mods:
+            for dep in (versions.get(mod.version_id) or {}).get("dependencies") or []:
+                if dep.get("dependency_type") != "required":
+                    continue
+                target = by_project.get(dep.get("project_id")) or by_version.get(
+                    dep.get("version_id"))
+                if target and target != mod.file_name:
+                    needs[mod.file_name].add(target)
+        return needs
+
+    async def _plan_removal(self, server: AdoptedServer, mod: InstalledMod) -> dict:
+        needs = await self._requirements(server)
+        titles = {m.file_name: m.title or m.file_name for m in server.mods}
+        required_by = sorted(f for f, deps in needs.items() if mod.file_name in deps)
+        # Mods installed as dependencies of what leaves that nothing staying requires,
+        # followed transitively. Mods the user added themselves are never offered.
+        installed_as_dependency = {m.file_name for m in server.mods if m.dependency}
+        leaving = {mod.file_name}
+        unused: list[str] = []
+        changed = True
+        while changed:
+            changed = False
+            needed = set().union(*(needs[f] for f in leaving))
+            for candidate in sorted(needed & installed_as_dependency - leaving):
+                staying = set(needs) - leaving - {candidate}
+                if not any(candidate in needs[f] for f in staying):
+                    leaving.add(candidate)
+                    unused.append(candidate)
+                    changed = True
+        warnings = []
+        if f"{MODS_DIR}/{mod.file_name}" in self._store.get_modpack_files(server.server_id):
+            warnings.append(f"{titles[mod.file_name]} is part of the linked modpack; "
+                            "a modpack update adds it back.")
+        return {
+            "file_name": mod.file_name,
+            "title": titles[mod.file_name],
+            "required_by": [{"file_name": f, "title": titles[f]} for f in required_by],
+            "unused_dependencies": [{"file_name": f, "title": titles[f]} for f in unused],
+            "warnings": warnings,
+        }
+
+    async def removal_plan(self, token: str, server_id: str, file_name: str) -> dict:
+        """What removing a mod affects: mods that require it and dependencies left unused."""
+        server = await self._adopted(token, server_id)
+        return await self._plan_removal(server, self._mod(server, file_name))
+
+    async def remove(self, token: str, server_id: str, file_name: str, force: bool,
+                     remove_dependencies: list[str]) -> dict:
+        """Delete a mod and the unused dependencies the user confirmed.
+
+        A mod other mods require is only removed with `force`. The plan is computed again
+        under the server lock, so a dependency that became needed meanwhile is refused.
+        """
+        async with self._locks(server_id):
+            server = await self._adopted(token, server_id)
+            mod = self._mod(server, file_name)
+            plan = await self._plan_removal(server, mod)
+            if plan["required_by"] and not force:
+                names = ", ".join(m["title"] for m in plan["required_by"])
+                raise ModOperationError(
+                    409, f"{plan['title']} is required by {names}. Confirm to remove it anyway.")
+            unused = {m["file_name"] for m in plan["unused_dependencies"]}
+            for name in remove_dependencies:
+                if name not in unused:
+                    raise ModOperationError(409, f"{name} is not an unused dependency of "
+                                                 f"{plan['title']}; review the removal again.")
+            titles = {m.file_name: m.title or m.file_name for m in server.mods}
+            removed = []
+            for name in [file_name, *dict.fromkeys(remove_dependencies)]:
+                try:
+                    await self._crafty.delete_file(token, server_id, f"{MODS_DIR}/{name}")
+                except CraftyError as exc:
+                    if exc.state == "unauthorized":
+                        raise
+                    done = ", ".join(r["file_name"] for r in removed)
+                    already = f" Already removed: {done}." if removed else ""
+                    raise ModOperationError(
+                        502, f"Crafty could not delete {name} ({exc.message}).{already}") from exc
+                self._store.remove_mod(server_id, name)
+                removed.append({"file_name": name, "title": titles[name]})
+            return {
+                "removed": removed,
+                "warnings": plan["warnings"],
+                "restart_required": True,
+                "server": self._store.get(server_id).to_dict(),
+            }

@@ -95,15 +95,28 @@
           <th scope="col">Mod</th>
           <th scope="col">Version</th>
           <th scope="col">Status</th>
-          <th scope="col"><span class="sr-only">Pin</span></th>
+          <th scope="col"><span class="sr-only">Actions</span></th>
         </tr>
       </thead>
       <tbody id="mod-rows"></tbody>
     </table>
   </div>
+
+  <dialog id="mod-dialog" class="mod-dialog" aria-labelledby="mod-dialog-title">
+    <form method="dialog" id="mod-dialog-form">
+      <h2 id="mod-dialog-title"></h2>
+      <div id="mod-dialog-body"></div>
+      <p id="mod-dialog-error" class="error"></p>
+      <div class="dialog-actions">
+        <button value="cancel" class="ghost" formnovalidate>Cancel</button>
+        <button id="mod-dialog-confirm" value="confirm" class="primary compact"></button>
+      </div>
+    </form>
+  </dialog>
 </main>
 {% endblock %}
 {% block scripts %}
 <script src="{{ url_for('static', path='server.js') }}"></script>
 <script src="{{ url_for('static', path='server_control.js') }}"></script>
+<script src="{{ url_for('static', path='server_mod_actions.js') }}"></script>
 {% endblock %}

@@ -151,6 +151,66 @@ async def update(
         session.crafty_token, server_id, file_name))
 
 
+@router.get("/{server_id}/mods/{file_name}/versions")
+async def versions(
+    server_id: ServerId,
+    file_name: str,
+    request: Request,
+    session: Session = Depends(require_session),
+) -> dict:
+    """Versions of an installed mod that fit the server."""
+    return await _run(request, session, lambda installer: installer.versions(
+        session.crafty_token, server_id, file_name))
+
+
+class VersionRequest(BaseModel):
+    version_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+
+
+@router.post("/{server_id}/mods/{file_name}/version", dependencies=[Depends(require_not_busy)])
+async def set_version(
+    server_id: ServerId,
+    file_name: str,
+    body: VersionRequest,
+    request: Request,
+    session: Session = Depends(require_session),
+) -> dict:
+    """Install a chosen version of a mod (not pinned)."""
+    return await _run(request, session, lambda installer: installer.set_version(
+        session.crafty_token, server_id, file_name, body.version_id))
+
+
+@router.get("/{server_id}/mods/{file_name}/removal")
+async def removal(
+    server_id: ServerId,
+    file_name: str,
+    request: Request,
+    session: Session = Depends(require_session),
+) -> dict:
+    """What removing a mod affects. Removes nothing."""
+    return await _run(request, session, lambda installer: installer.removal_plan(
+        session.crafty_token, server_id, file_name))
+
+
+class RemoveRequest(BaseModel):
+    # Remove the mod even though other mods require it.
+    force: bool = False
+    # Unused dependencies (file names from the removal plan) to remove as well.
+    remove_dependencies: list[str] = Field(default_factory=list, max_length=200)
+
+
+@router.post("/{server_id}/mods/{file_name}/remove", dependencies=[Depends(require_not_busy)])
+async def remove(
+    server_id: ServerId,
+    file_name: str,
+    body: RemoveRequest,
+    request: Request,
+    session: Session = Depends(require_session),
+) -> dict:
+    return await _run(request, session, lambda installer: installer.remove(
+        session.crafty_token, server_id, file_name, body.force, body.remove_dependencies))
+
+
 @router.post("/{server_id}/update-all", dependencies=[Depends(require_json), Depends(require_not_busy)])
 async def update_all(
     server_id: ServerId,

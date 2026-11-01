@@ -391,3 +391,21 @@ input[type="search"]:focus, select:focus, button:focus-visible {
 .running-badge { background: rgba(47, 191, 113, .15); color: var(--accent); }
 .crashed-badge { background: rgba(239, 107, 107, .15); color: var(--danger); }
 .danger-text { color: var(--danger); }
+
+.mod-dialog {
+  width: min(480px, calc(100vw - 32px));
+  padding: 20px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.mod-dialog::backdrop { background: rgba(0, 0, 0, .6); }
+.mod-dialog h2 { margin: 0 0 12px; font-size: 18px; }
+.mod-dialog p { margin: 0 0 10px; }
+.mod-dialog select { width: 100%; }
+.dialog-check { display: flex; gap: 8px; align-items: flex-start; margin: 6px 0; cursor: pointer; }
+.mod-dialog .warn { color: #f2b35b; }
+.mod-dialog .error { color: var(--danger); margin: 8px 0 0; }
+.mod-dialog .error:empty { display: none; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }

@@ -19,6 +19,8 @@ class InstalledMod:
     latest_version_id: str | None = None
     latest_version_number: str | None = None
     pinned: bool = False
+    # Installed by craftyComplete because another mod required it.
+    dependency: bool = False
 
     @property
     def update_available(self) -> bool:

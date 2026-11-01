@@ -21,6 +21,7 @@ function statusBadges(mod) {
   else if (mod.update_available) badges.push(badge("Update available", "update-badge"));
   else badges.push(badge("Up to date", "ok-badge"));
   if (mod.server_side === "unsupported") badges.push(badge("Client only", "warn-badge"));
+  if (mod.dependency) badges.push(badge("Dependency", "muted-badge"));
   return badges;
 }
 
@@ -59,6 +60,14 @@ function renderMod(mod) {
     actions.append(update, " ");
   }
   actions.append(pin);
+  if (mod.state === "identified" && !mod.pinned) {
+    const pick = el("button", { class: "ghost compact", title: "Install another version" }, "Version");
+    pick.addEventListener("click", () => openVersionDialog(mod));
+    actions.append(" ", pick);
+  }
+  const remove = el("button", { class: "ghost compact danger-text" }, "Remove");
+  remove.addEventListener("click", () => openRemoveDialog(mod));
+  actions.append(" ", remove);
 
   return el("tr", {},
     el("td", {},

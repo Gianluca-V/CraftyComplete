@@ -5,7 +5,7 @@ from pathlib import Path
 
 from crafty_complete.mods.models import AdoptedServer, InstalledMod
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS adopted_servers (
@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS server_mods (
     latest_version_id     TEXT,
     latest_version_number TEXT,
     pinned                INTEGER NOT NULL DEFAULT 0,
+    dependency            INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (server_id, file_name)
 );
 -- The files the linked modpack version put on the server (path relative to the server
@@ -53,6 +54,7 @@ MIGRATIONS = {
     2: [f"ALTER TABLE adopted_servers ADD COLUMN {column} TEXT" for column in (
         "modpack_project_id", "modpack_title", "modpack_version_id", "modpack_version_number")],
     3: [],  # adds the modpack_files table, created by SCHEMA
+    4: ["ALTER TABLE server_mods ADD COLUMN dependency INTEGER NOT NULL DEFAULT 0"],
 }
 
 SERVER_COLUMNS = ["server_id", "loader", "game_version", "scanned_at", "updates_checked_at",
@@ -63,7 +65,8 @@ MOD_COLUMNS = [f.name for f in fields(InstalledMod)]
 
 
 def _mod(row: sqlite3.Row) -> InstalledMod:
-    return InstalledMod(**{**{c: row[c] for c in MOD_COLUMNS}, "pinned": bool(row["pinned"])})
+    return InstalledMod(**{**{c: row[c] for c in MOD_COLUMNS}, "pinned": bool(row["pinned"]),
+                           "dependency": bool(row["dependency"])})
 
 
 class AdoptionStore:
