@@ -3,6 +3,7 @@ import json
 import time
 
 import httpx
+import pytest
 from mcp import Client
 
 from crafty_complete.config import Settings
@@ -141,7 +142,7 @@ def test_stop_needs_a_confirmation_token(tmp_path):
 
     assert plan["confirmation_required"] is True
     assert plan["plan"] == {"action": "stop", "server_id": CONTROL_SERVER,
-                            "state": "running", "players_online": ["Steve", "Alex"]}
+                            "state": "running", "players": ["Steve", "Alex"]}
     assert plan["expires_in_seconds"] == 300
     assert sent_before == []
     assert done == {"action": "stop", "sent": True}
@@ -364,3 +365,51 @@ def test_update_modpack_needs_confirmation_and_then_runs(tmp_path):
 
 def backup_count(fakes):
     return sum(path.startswith(".crafty-complete/backups/") for path in fakes.files)
+
+
+# --- busy servers ----------------------------------------------------------------------
+
+@pytest.mark.parametrize("action", ["start", "restart"])
+def test_start_and_restart_are_refused_while_the_server_is_busy(tmp_path, monkeypatch, action):
+    """Same rule as the web route (NEEDS_IDLE_SERVER): a busy server must not start."""
+    from crafty_complete.mods.locks import ServerLocks
+
+    fakes = FakeCrafty()
+    server = mcp_server(fakes, tmp_path)
+    monkeypatch.setattr(ServerLocks, "busy", lambda self, sid: "A modpack update is running.")
+
+    async def steps(call):
+        first = await call("server_power", server_id=CONTROL_SERVER, action=action)
+        if "confirm_token" not in first:
+            return first
+        return await call("server_power", server_id=CONTROL_SERVER, action=action,
+                          confirm_token=first["confirm_token"])
+
+    assert run(server, steps) == {"error": "A modpack update is running."}
+    assert fakes.actions == []
+
+
+def test_stop_is_allowed_while_the_server_is_busy(tmp_path, monkeypatch):
+    from crafty_complete.mods.locks import ServerLocks
+
+    fakes = FakeCrafty()
+    server = mcp_server(fakes, tmp_path)
+    monkeypatch.setattr(ServerLocks, "busy", lambda self, sid: "A modpack update is running.")
+
+    async def steps(call):
+        plan = await call("server_power", server_id=CONTROL_SERVER, action="stop")
+        return await call("server_power", server_id=CONTROL_SERVER, action="stop",
+                          confirm_token=plan["confirm_token"])
+
+    assert run(server, steps) == {"action": "stop", "sent": True}
+
+
+def test_check_mod_updates_is_refused_while_the_server_is_busy(tmp_path, monkeypatch):
+    from crafty_complete.mods.locks import ServerLocks
+
+    server = mcp_server(ModFakes(), tmp_path)
+    monkeypatch.setattr(ServerLocks, "busy", lambda self, sid: "A modpack update is running.")
+
+    result = run(server, lambda call: call("check_mod_updates", server_id=MOD_SERVER))
+
+    assert result == {"error": "A modpack update is running."}

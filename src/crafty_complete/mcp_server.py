@@ -32,7 +32,7 @@ from crafty_complete.modpacks.packs import describe_failure
 from crafty_complete.mods.adoption import NoModsFolder
 from crafty_complete.mods.installer import ModOperationError
 from crafty_complete.players.service import PlayerAction, PlayerError
-from crafty_complete.servers.control import PowerAction
+from crafty_complete.servers.control import NEEDS_IDLE_SERVER, PowerAction
 from crafty_complete.servers.creator import KINDS, NewServerRequest
 from crafty_complete.services import Services, open_services
 
@@ -220,7 +220,7 @@ def create_mcp_server(settings: Settings | None = None,
         """Start a server, or stop, restart or kill it (these three need confirmation)."""
         current = state(ctx)
         power = PowerAction(action)
-        if power is PowerAction.START:
+        if power in NEEDS_IDLE_SERVER:
             not_busy(current, server_id)
         if power is not PowerAction.START:
             arguments = {"server_id": server_id, "action": action}
@@ -228,7 +228,7 @@ def create_mcp_server(settings: Settings | None = None,
                 status = await guarded(current.services.control.status(current.token, server_id))
                 return confirmations.issue("server_power", arguments, {
                     "action": action, "server_id": server_id, "state": status["state"],
-                    "players_online": status["players"]})
+                    "players": status["players"]})
             confirmations.redeem("server_power", arguments, confirm_token)
         await guarded(current.services.control.power(current.token, server_id, power))
         return {"action": action, "sent": True}
@@ -291,6 +291,7 @@ def create_mcp_server(settings: Settings | None = None,
     async def check_mod_updates(server_id: ServerId, ctx: Context) -> dict[str, Any]:
         """Refresh which adopted mods have updates. Installs nothing."""
         current = state(ctx)
+        not_busy(current, server_id)
         adoption = current.services.adoption
         await guarded(adoption.ensure_file_access(current.token, server_id))
         return (await guarded(adoption.check_updates(server_id))).to_dict()
@@ -490,6 +491,8 @@ def create_mcp_server(settings: Settings | None = None,
                 "note": "The pack's files are replaced, mods you added are kept, and replaced "
                         "files are moved to .crafty-complete/backups/ on the server."},
                 resolved={"version_id": target.version["id"]})
+        if current.services.jobs.running(JOB_OWNER):
+            raise ToolError("A job is already running; follow it with job_status first.")
         pending = confirmations.redeem("update_modpack", arguments, confirm_token)
         server, target = await guarded(updater.prepare(
             current.token, server_id, pending.resolved["version_id"]))
