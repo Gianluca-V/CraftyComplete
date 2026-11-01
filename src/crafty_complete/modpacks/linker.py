@@ -90,6 +90,21 @@ class ModpackLinker:
         return [v for v in await self._modrinth.project_versions(project_id)
                 if self.compatible(v, server)]
 
+    async def status(self, token: str, server_id: str) -> dict[str, Any]:
+        """The linked modpack version and the newest one for the same Minecraft and loader."""
+        await self._adoption.ensure_file_access(token, server_id)
+        server = self._store.get(server_id)
+        if not server.modpack_project_id:
+            return {"linked": None, "latest": None, "update_available": False, "versions": []}
+        versions = await self.compatible_versions(server.modpack_project_id, server)
+        latest = newest_update(versions, server.modpack_version_id)
+        return {
+            "linked": server.to_dict()["modpack"],
+            "latest": version_summary(latest) if latest else None,
+            "update_available": latest is not None,
+            "versions": [version_summary(v) for v in versions],
+        }
+
     async def prepare(self, token: str, server_id: str, project_id: str,
                       version_id: str) -> LinkTarget:
         server = await self.adopted(token, server_id)

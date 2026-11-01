@@ -55,6 +55,8 @@ Environment variables (or a `.env` file in the working directory):
 |----------|---------|-------------|
 | `CRAFTY_COMPLETE_CRAFTY_URL` | — | Crafty base URL, e.g. `https://192.168.1.20:8443`. Required for login. |
 | `CRAFTY_COMPLETE_CRAFTY_API_TOKEN` | — | Optional service token, used only by `/api/health` |
+| `CRAFTY_COMPLETE_MCP_CRAFTY_TOKEN` | — | Crafty API token the MCP server acts with (see [MCP server](#mcp-server)); not used by the web app |
+| `CRAFTY_COMPLETE_MOJANG_URL` | `https://api.mojang.com` | Mojang API, used to find a player's UUID when editing the player files of a stopped server |
 | `CRAFTY_COMPLETE_CRAFTY_VERIFY_TLS` | `true` | Set `false` for Crafty's default self-signed certificate on a trusted network |
 | `CRAFTY_COMPLETE_MODRINTH_URL` | `https://api.modrinth.com/v2` | Modrinth API base URL |
 | `CRAFTY_COMPLETE_USER_AGENT` | `craftyComplete/<version>` | User-Agent sent to Modrinth |
@@ -85,6 +87,16 @@ Everything except `/api/health`, `/login` and `/api/auth/login` requires a sessi
 - `POST /api/servers/{server_id}/mods` — JSON `{"project_id": "<Modrinth id or slug>"}`. Installs the newest compatible release for the server's loader and Minecraft version (Quilt servers also accept Fabric mods), plus missing required dependencies. Refuses client-only projects and modpacks (`422`), projects with no compatible version (`422`), projects already installed, mods declared incompatible with an installed one, or a different file already using the target name (`409`), and servers not adopted yet (`409`). Dependencies that are client-only or have no compatible version, and files Modrinth does not host, are reported under `skipped` for you to handle by hand.
 - `POST /api/servers/{server_id}/mods/{file_name}/update` — update one mod to its latest compatible version (`409` when pinned, unknown or already up to date).
 - `POST /api/servers/{server_id}/update-all` — update every unpinned mod that has an update; failures are listed under `failed` and do not stop the rest.
+- `GET /api/servers/{server_id}/status` — `state` (`running`, `stopped`, `starting`, `updating`, `crashed`), `players_online`, `max_players`, `players`, `cpu_percent`, `memory`, `memory_percent`, `started`, `version`, `world_size`, `port`.
+- `POST /api/servers/{server_id}/power` — JSON `{"action": "start"|"stop"|"restart"|"kill"}`. Needs Crafty's Commands permission (`403`). Start and restart answer `409` while a modpack update writes the server's files.
+- `GET /api/servers/{server_id}/mods/{file_name}/versions` — versions of an installed mod for the server's loader and Minecraft version, and `current_version_id`.
+- `POST /api/servers/{server_id}/mods/{file_name}/version` — JSON `{"version_id"}`: install that version (with missing dependencies). Not pinned; `latest_*` keeps the newest release, so Update all can move it back. `409` for pinned mods or the installed version, `422` for a version that does not fit the server.
+- `GET /api/servers/{server_id}/mods/{file_name}/removal` — what removing a mod affects: `required_by`, `unused_dependencies` (only mods craftyComplete installed as dependencies that nothing else needs), `warnings`, `requirements_checked` (false when Modrinth cannot be reached).
+- `POST /api/servers/{server_id}/mods/{file_name}/remove` — JSON `{"force"?, "remove_dependencies"?: [file names]}`. A mod other mods require, or any mod while Modrinth is unreachable, needs `force` (`409` otherwise). Only dependencies from the plan are accepted, and none that a mod you keep still requires (`409`, nothing deleted).
+- `GET /api/servers/{server_id}/players` — `running`, `online`, `whitelist`, `ops`, `banned`.
+- `POST /api/servers/{server_id}/players` — JSON `{"action", "name", "reason"?}` with `action` one of `whitelist_add`, `whitelist_remove`, `op`, `deop`, `ban`, `pardon`, `kick`. Names must be Minecraft names (`^[A-Za-z0-9_]{1,16}$`); a reason (one line, at most 200 characters) only applies to ban and kick. Answers `{"applied": "command"|"file", "changed"}`.
+- `GET /api/servers/new/options` — server kinds (`vanilla`, `paper`, `fabric`, `forge`, `neoforge`) with the Minecraft versions Crafty's catalog offers for each.
+- `POST /api/servers/new` — JSON `{"kind", "minecraft", "name", "port", "mem_min", "mem_max", "mods"?: [Modrinth ids or slugs], "agree_to_eula": true}`. Answers `202 {"job_id"}`; the job's `result.installed` lists the mods installed.
 - `POST /api/servers/{server_id}/check-updates` — refresh `latest_version_*` and `update_available` from the stored hashes, without downloading jars. Returns the server like `GET .../mods`, including `updates_checked_at`.
 
 - `GET /api/modpacks/{project}/versions` — a modpack's versions with `loaders`, `game_versions`, `version_type` and `supported` (Fabric, Forge or NeoForge).
@@ -109,6 +121,35 @@ Server endpoints check, with your own Crafty token, that you have Crafty's **Fil
 
   Returns `502` when Modrinth fails.
 - `GET /api/catalog/filters?type=mod|modpack` — loaders, release game versions and categories for the filter sidebar (cached for one hour).
+
+## MCP server
+
+`crafty-complete-mcp` is an [MCP](https://modelcontextprotocol.io) server that lets an AI agent do everything the web app does: list servers and their status, start and stop them, adopt them, search, install, update, pin, version and remove mods, manage players, create vanilla, Paper, mod-loader and modpack servers, and link or update modpacks. It runs as a local stdio process started by the MCP client and shares the web app's code and SQLite database.
+
+It acts with one Crafty API token (create one in the Crafty panel under your user's API keys), so Crafty enforces that user's permissions. Keep the token out of shared config files and give it to a user with only the permissions the agent needs.
+
+Example for Claude Desktop (`claude_desktop_config.json`) or Claude Code (`.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "crafty": {
+      "command": "C:/path/to/craftyComplete/.venv/Scripts/crafty-complete-mcp.exe",
+      "env": {
+        "CRAFTY_COMPLETE_CRAFTY_URL": "https://192.168.1.20:8443",
+        "CRAFTY_COMPLETE_MCP_CRAFTY_TOKEN": "<Crafty API token>",
+        "CRAFTY_COMPLETE_DATABASE_PATH": "C:/path/to/craftyComplete/crafty_complete.sqlite3"
+      }
+    }
+  }
+}
+```
+
+On Linux the command is `.venv/bin/crafty-complete-mcp`. Point `CRAFTY_COMPLETE_DATABASE_PATH` at the web app's database so both see the same adopted servers.
+
+Tools that stop, restart or kill a server, remove a mod, ban or kick a player, or move a server to another modpack version take two calls. The first returns a `plan` and a `confirm_token`; the agent should show the plan to you and call again with the same arguments plus the token only if you agree. A token works once, for that tool and those arguments, for 5 minutes. Creating a server requires `accept_minecraft_eula: true`, which the agent should only send after you accept the EULA. Long work returns a `job_id` to follow with `job_status`; jobs live as long as the MCP server process, one at a time.
+
+The MCP server and the web app are separate processes: a modpack update running in one does not block mod changes started from the other, so avoid changing the same server from both at once.
 
 ## Tests
 

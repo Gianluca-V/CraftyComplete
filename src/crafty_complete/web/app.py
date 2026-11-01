@@ -1,7 +1,7 @@
 import time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from pathlib import Path
 
 import httpx
@@ -12,26 +12,14 @@ from fastapi.templating import Jinja2Templates
 
 from crafty_complete import __version__
 from crafty_complete.auth.sessions import SessionStore
-from crafty_complete.catalog.modrinth import ModrinthProvider
 from crafty_complete.config import Settings
-from crafty_complete.crafty.client import CookielessTransport, CraftyClient, CraftyStatus
+from crafty_complete.crafty.client import CraftyClient, CraftyStatus
+from crafty_complete.services import open_services
 from crafty_complete.web.auth_routes import router as auth_router
 from crafty_complete.web.catalog_routes import router as catalog_router
 from crafty_complete.web.control_routes import router as control_router
 from crafty_complete.web.create_routes import router as create_router
 from crafty_complete.web.player_routes import router as player_router
-from crafty_complete.mods.adoption import AdoptionService
-from crafty_complete.mods.installer import ModInstaller
-from crafty_complete.mods.locks import ServerLocks
-from crafty_complete.mods.store import AdoptionStore
-from crafty_complete.mods.update_checker import UpdateChecker
-from crafty_complete.modpacks.creator import ModpackServerCreator
-from crafty_complete.modpacks.jobs import JobRegistry
-from crafty_complete.modpacks.linker import ModpackLinker
-from crafty_complete.modpacks.updater import ModpackUpdater
-from crafty_complete.players.service import PlayerService
-from crafty_complete.servers.control import ServerControl
-from crafty_complete.servers.creator import ServerCreator
 from crafty_complete.web.modpack_routes import ProjectRef
 from crafty_complete.web.modpack_routes import router as modpack_router
 from crafty_complete.web.deps import current_session, require_session
@@ -51,64 +39,14 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        modrinth_http = httpx.AsyncClient(
-            base_url=settings.modrinth_url,
-            headers={"User-Agent": settings.user_agent},
-            timeout=settings.http_timeout_seconds,
-            transport=transport,
-        )
-        app.state.catalog = ModrinthProvider(modrinth_http)
-        mojang_http = httpx.AsyncClient(
-            base_url=settings.mojang_url,
-            headers={"User-Agent": settings.user_agent},
-            timeout=settings.http_timeout_seconds,
-            transport=transport,
-        )
-
-        crafty_http = None
-        if settings.crafty_url:
-            crafty_http = httpx.AsyncClient(
-                base_url=settings.crafty_url.rstrip("/"),
-                timeout=settings.http_timeout_seconds,
-                transport=CookielessTransport(
-                    transport or httpx.AsyncHTTPTransport(verify=settings.crafty_verify_tls)
-                ),
-            )
-            app.state.crafty = CraftyClient(crafty_http)
-        else:
-            app.state.crafty = None
-
-        store = app.state.adoption_store = AdoptionStore(settings.database_path)
-        locks = app.state.locks = ServerLocks()
-        # Routes refuse to use these while Crafty is not configured (require_crafty);
-        # the background update check only needs Modrinth and the store.
-        adoption = app.state.adoption = AdoptionService(
-            app.state.crafty, app.state.catalog, store, locks)
-        installer = app.state.installer = ModInstaller(
-            app.state.crafty, app.state.catalog, store, adoption, locks)
-        app.state.server_creator = ServerCreator(
-            app.state.crafty, adoption, installer, store, locks, settings)
-        checker = app.state.update_checker = UpdateChecker(
-            adoption, store, settings.update_check_hours)
-        app.state.modpack_creator = ModpackServerCreator(
-            app.state.crafty, app.state.catalog, adoption, store, locks, settings)
-        app.state.modpack_linker = ModpackLinker(
-            app.state.catalog, adoption, store, locks, settings)
-        app.state.modpack_updater = ModpackUpdater(
-            app.state.crafty, app.state.catalog, app.state.modpack_linker, adoption, store,
-            locks, settings)
-        app.state.control = ServerControl(app.state.crafty)
-        app.state.players = PlayerService(app.state.crafty, mojang_http, locks)
-        app.state.jobs = JobRegistry()
-        checker.start()
-        yield
-        await app.state.jobs.shutdown()
-        await checker.stop()
-        store.close()
-        await modrinth_http.aclose()
-        await mojang_http.aclose()
-        if crafty_http:
-            await crafty_http.aclose()
+        async with open_services(settings, transport) as services:
+            for field in fields(services):
+                setattr(app.state, field.name, getattr(services, field.name))
+            services.update_checker.start()
+            try:
+                yield
+            finally:
+                await services.update_checker.stop()
 
     # Interactive API docs would be the only pages reachable without a session.
     app = FastAPI(title="craftyComplete", version=__version__, lifespan=lifespan,

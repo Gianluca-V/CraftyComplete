@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     crafty_url: str | None = None
     # Optional service token, used only by /api/health. Users act with their own tokens.
     crafty_api_token: str | None = None
+    # The Crafty API token the MCP server acts with; Crafty enforces that user's permissions.
+    mcp_crafty_token: str | None = None
     # Crafty ships a self-signed certificate by default; set to false only on a trusted network.
     crafty_verify_tls: bool = True
 

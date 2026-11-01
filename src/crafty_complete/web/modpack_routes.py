@@ -12,7 +12,7 @@ from crafty_complete.modpacks.creator import (
     CreationRefused,
     ModpackServerCreator,
 )
-from crafty_complete.modpacks.linker import ModpackLinker, newest_update, version_summary
+from crafty_complete.modpacks.linker import ModpackLinker
 from crafty_complete.modpacks.packs import describe_failure
 from crafty_complete.modpacks.updater import ModpackUpdater
 from crafty_complete.web.deps import crafty_failure, require_crafty, require_session
@@ -133,22 +133,8 @@ async def modpack_status(server_id: ServerId, request: Request,
                          session: Session = Depends(require_session)) -> dict:
     """The linked modpack version and the newest one for the same Minecraft and loader."""
     linker = _linker(request)
-
-    async def status() -> dict:
-        await request.app.state.adoption.ensure_file_access(session.crafty_token, server_id)
-        server = request.app.state.adoption_store.get(server_id)
-        if not server.modpack_project_id:
-            return {"linked": None, "latest": None, "update_available": False, "versions": []}
-        versions = await linker.compatible_versions(server.modpack_project_id, server)
-        latest = newest_update(versions, server.modpack_version_id)
-        return {
-            "linked": server.to_dict()["modpack"],
-            "latest": version_summary(latest) if latest else None,
-            "update_available": latest is not None,
-            "versions": [version_summary(v) for v in versions],
-        }
-
-    return await _guarded(request, session, status)
+    return await _guarded(request, session, lambda: linker.status(
+        session.crafty_token, server_id))
 
 
 @router.post("/servers/{server_id}/modpack/link", status_code=202)
