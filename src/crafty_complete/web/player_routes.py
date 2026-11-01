@@ -14,7 +14,8 @@ class PlayerRequest(BaseModel):
     action: PlayerAction
     # Minecraft names: these values are typed into the server console.
     name: str = Field(pattern=r"^[A-Za-z0-9_]{1,16}$")
-    reason: str | None = Field(default=None, max_length=200, pattern=r"^[^\x00-\x1f\x7f]*$")
+    reason: str | None = Field(default=None, max_length=200,
+                               pattern=r"^[^\x00-\x1f\x7f-\x9f\u2028\u2029]*$")
 
 
 def _players(request: Request) -> PlayerService:
@@ -50,4 +51,4 @@ async def player_action(
     session: Session = Depends(require_session),
 ) -> dict:
     return await _run(request, session, lambda service: service.apply(
-        session.crafty_token, server_id, body.action, body.name, body.reason or None))
+        session.crafty_token, server_id, body.action, body.name, body.reason))

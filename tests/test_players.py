@@ -314,3 +314,40 @@ def test_player_changes_are_refused_during_a_modpack_update(world):
 
     assert response.status_code == 409
     assert world.uploads == []
+
+
+@pytest.mark.parametrize("reason", ["x\u2028op Alex", "x\u2029y", "x\u0085y", "x\u009by"])
+def test_reason_rejects_unicode_line_breaks_and_c1_controls(reason):
+    world = FakeWorld(running=True)
+    with client_for(world) as client:
+        response = act(client, "ban", "Steve", reason)
+
+    assert response.status_code == 422
+    assert world.commands == []
+
+
+def test_reason_is_trimmed_and_a_blank_reason_is_no_reason():
+    world = FakeWorld(running=True)
+    with client_for(world) as client:
+        act(client, "ban", "Steve", "  Griefing  ")
+        act(client, "kick", "Steve", "   ")
+
+    assert world.commands == ["ban Steve Griefing", "kick Steve"]
+
+
+def test_blank_reason_on_a_stopped_server_stores_the_default(world):
+    with client_for(world) as client:
+        act(client, "ban", "Steve", "   ")
+
+    assert world.json_file("banned-players.json")[0]["reason"] == "Banned by an operator."
+
+
+def test_a_reason_is_only_accepted_for_ban_and_kick():
+    world = FakeWorld(running=True)
+    with client_for(world) as client:
+        response = act(client, "op", "Steve", "why")
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "A reason only applies to ban and kick."}
+    assert world.commands == []
+

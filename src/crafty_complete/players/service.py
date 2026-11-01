@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -45,6 +46,10 @@ FILE_EDITS = {
 }
 # Matches what vanilla writes for a ban made from the console.
 DEFAULT_BAN_REASON = "Banned by an operator."
+# Player names and reasons are typed into the server console: no line breaks or controls.
+PLAYER_NAME = re.compile(r"^[A-Za-z0-9_]{1,16}$")
+UNSAFE_REASON = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+REASON_ACTIONS = {PlayerAction.BAN, PlayerAction.KICK}
 
 
 class PlayerError(Exception):
@@ -119,7 +124,13 @@ class PlayerService:
 
     async def apply(self, token: str, server_id: str, action: PlayerAction, name: str,
                     reason: str | None = None) -> dict[str, Any]:
-        """`name` and `reason` must already be validated: they end up in a console line."""
+        if not PLAYER_NAME.match(name):
+            raise PlayerError(422, f"{name!r} is not a valid Minecraft player name.")
+        reason = (reason or "").strip() or None
+        if reason and action not in REASON_ACTIONS:
+            raise PlayerError(422, "A reason only applies to ban and kick.")
+        if reason and (len(reason) > 200 or UNSAFE_REASON.search(reason)):
+            raise PlayerError(422, "The reason must be one line of at most 200 characters.")
         running = bool((await self._crafty.server_stats(token, server_id)).get("running"))
         if running:
             command = f"{COMMANDS[action]} {name}" + (f" {reason}" if reason else "")
