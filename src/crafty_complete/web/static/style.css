@@ -316,7 +316,7 @@ input[type="search"]:focus, select:focus, button:focus-visible {
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
-.create-form select, .create-form input:not([type="checkbox"]) {
+.create-form select, .create-form textarea, .create-form input:not([type="checkbox"]) {
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -434,3 +434,6 @@ input[type="search"]:focus, select:focus, button:focus-visible {
 .player-list li { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .player-list .player-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .player-list .empty { color: var(--muted); }
+.create-form textarea { font: inherit; color: inherit; resize: vertical; min-width: 0; }
+.create-form .field[hidden] { display: none; }
+.page-head .link-button { margin-top: 8px; display: inline-block; }

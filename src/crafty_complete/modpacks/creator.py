@@ -1,7 +1,6 @@
 import asyncio
 import shutil
 import tempfile
-import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -14,6 +13,7 @@ from crafty_complete.mods.adoption import AdoptionService
 from crafty_complete.mods.locks import ServerLocks
 from crafty_complete.mods.store import AdoptionStore
 from crafty_complete.modpacks.jobs import Job, JobFailure
+from crafty_complete.servers.provision import NewServer, catalog_versions, create_and_install
 from crafty_complete.modpacks.transfer import ServerWriter, parent_of
 from crafty_complete.modpacks.packs import (
     PackReader,
@@ -23,8 +23,7 @@ from crafty_complete.modpacks.packs import (
     sendable,
 )
 
-# Crafty's catalog category and server types for each loader it can install.
-CRAFTY_CATEGORY = "mc_java_servers"
+# Crafty's catalog server types for each loader it can install.
 CRAFTY_TYPES = {"fabric": "fabric", "forge": "forge-installer", "neoforge": "neoforge-installer"}
 LOADER_NAMES = {"fabric": "Fabric", "forge": "Forge", "neoforge": "NeoForge"}
 # The dependency key each loader uses in modrinth.index.json, for messages.
@@ -120,8 +119,7 @@ class ModpackServerCreator:
         loader = loaders[0]
 
         catalog = await self._crafty.jar_catalog(token)
-        crafty_versions = (catalog.get(CRAFTY_CATEGORY, {}).get("types", {})
-                           .get(CRAFTY_TYPES[loader], {}).get("versions", {}))
+        crafty_versions = catalog_versions(catalog, CRAFTY_TYPES[loader])
         game_versions = version.get("game_versions") or [None]
         # A version may list several Minecraft versions; use one Crafty can install.
         minecraft = next((gv for gv in game_versions if gv in crafty_versions),
@@ -186,53 +184,10 @@ class ModpackServerCreator:
     async def _create_in_crafty(self, job: Job, token: str, prepared: Prepared,
                                 request: CreateRequest) -> None:
         """Phase 2: create the server and wait until Crafty has installed the loader."""
-        loader_name = LOADER_NAMES[prepared.loader]
-        job.begin("Creating the server in Crafty")
-        job.server_name = request.name
-        job.server_id = await self._crafty.create_server(token, {
-            "name": request.name,
-            "monitoring_type": "minecraft_java",
-            # Crafty pings the game port to show status; the server runs on Crafty's host.
-            "minecraft_java_monitoring_data": {"host": "127.0.0.1", "port": request.port},
-            "create_type": "minecraft_java",
-            "minecraft_java_create_data": {
-                "create_type": "download_jar",
-                "download_jar_create_data": {
-                    "category": CRAFTY_CATEGORY,
-                    "type": CRAFTY_TYPES[prepared.loader],
-                    "version": prepared.minecraft,
-                    "mem_min": request.mem_min,
-                    "mem_max": request.mem_max,
-                    "server_properties_port": request.port,
-                    "agree_to_eula": True,
-                },
-            },
-        })
-
-        job.begin(f"Installing {loader_name} in Crafty")
-        deadline = time.monotonic() + self._settings.modpack_install_timeout_minutes * 60
-        while True:
-            stats = await self._writer.retry(lambda: self._crafty.server_stats(token, job.server_id))
-            if not stats.get("importing"):
-                server = await self._writer.retry(lambda: self._crafty.get_server(token, job.server_id))
-                if prepared.loader == "fabric":
-                    # `importing` is also false during the ~3 s Crafty waits before its
-                    # download starts, so only the jar on disk proves it finished.
-                    root = await self._writer.retry(
-                        lambda: self._crafty.list_dir(token, job.server_id, ""))
-                    if any(e.name == server.get("executable") and not e.is_dir for e in root):
-                        return
-                # Crafty clears `importing` before its Forge/NeoForge installer runs; the
-                # installer rewrites the start command once it has succeeded.
-                elif "--installServer" not in (server.get("execution_command") or ""):
-                    return
-            if time.monotonic() >= deadline:
-                what = "download" if prepared.loader == "fabric" else "installer"
-                raise JobFailure(
-                    f'Crafty created "{request.name}" but its {loader_name} {what} did not '
-                    "finish in time. Check the server's terminal in Crafty, then delete the "
-                    "server there and try again.", names_server=True)
-            await asyncio.sleep(self._settings.modpack_poll_seconds)
+        await create_and_install(self._crafty, self._writer, self._settings, job, token,
+                                 NewServer(request.name, request.port, request.mem_min,
+                                           request.mem_max, CRAFTY_TYPES[prepared.loader],
+                                           prepared.minecraft, LOADER_NAMES[prepared.loader]))
 
     async def _upload(self, job: Job, token: str, files: dict[str, Path]) -> None:
         """Phase 3a: send every file to the new server through Crafty."""

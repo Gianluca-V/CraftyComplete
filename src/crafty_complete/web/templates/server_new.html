@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}New server{% endblock %}
+{% block content %}
+<main class="page">
+  <a class="back" href="/servers">‹ All servers</a>
+  <div class="page-head">
+    <h1>New server</h1>
+    <p class="muted">Crafty downloads the server or installs its mod loader. For Fabric, Forge and
+      NeoForge, craftyComplete then installs the mods you list, with their required dependencies.
+      To start from a modpack, use the Modpacks tab on <a href="/">Browse</a>.</p>
+  </div>
+
+  <form id="create-form" class="create-form" novalidate>
+    <div class="field-row">
+      <label class="field">
+        Type
+        <select name="kind" id="kind" required></select>
+      </label>
+      <label class="field">
+        Minecraft version
+        <select name="minecraft" id="minecraft" required></select>
+      </label>
+    </div>
+    <label class="field">
+      Server name
+      <input name="name" id="server-name" required minlength="2" maxlength="64">
+    </label>
+    <div class="field-row">
+      <label class="field">
+        Port
+        <input name="port" type="number" min="1" max="65535" value="25565" required>
+      </label>
+      <label class="field">
+        Min memory (GB)
+        <input name="mem_min" type="number" min="0.5" step="0.5" value="2" required>
+      </label>
+      <label class="field">
+        Max memory (GB)
+        <input name="mem_max" type="number" min="0.5" step="0.5" value="4" required>
+      </label>
+    </div>
+    <label class="field" id="mods-field">
+      Mods (optional): one Modrinth slug or link per line
+      <textarea name="mods" id="mods" rows="4" spellcheck="false"
+        placeholder="lithium&#10;https://modrinth.com/mod/ferrite-core"></textarea>
+    </label>
+    <label class="check">
+      <input type="checkbox" name="agree_to_eula">
+      I accept the <a href="https://aka.ms/MinecraftEULA" target="_blank" rel="noopener">Minecraft EULA</a>
+    </label>
+    <p id="form-error" class="status is-error" role="alert"></p>
+    <button type="submit" class="primary compact" id="create">Create server</button>
+  </form>
+
+  <section id="job" class="job" hidden aria-live="polite">
+    <h2 id="job-title"></h2>
+    <p id="job-step" class="job-step"></p>
+    <progress id="job-progress" max="1" value="0"></progress>
+    <ul id="job-installed" class="job-warnings"></ul>
+    <ul id="job-warnings" class="job-warnings"></ul>
+    <p id="job-error" class="status is-error"></p>
+    <a id="job-link" class="primary compact link-button" hidden>Open the server</a>
+  </section>
+</main>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', path='server_new.js') }}"></script>
+{% endblock %}

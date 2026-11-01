@@ -27,6 +27,8 @@ The **Servers** list shows whether each server is running and how many players a
 
 The **Players** panel on the server page lists who is online, the whitelist, the operators and the banned players, and adds or removes players from each list (whitelist, op/deop, ban/pardon) or kicks them. While the server runs, changes are sent as console commands (Crafty's Commands permission). While it is stopped, craftyComplete edits `whitelist.json`, `ops.json` and `banned-players.json` (Files permission) and the change applies on the next start; new entries get the player's UUID from Mojang, or the offline UUID when `server.properties` sets `online-mode=false`. Kick needs a running server.
 
+To **create a server without a modpack**, press **New server** on the Servers page. Choose Vanilla, Paper, Fabric, Forge or NeoForge and one of the Minecraft versions Crafty offers for it, then a name, port and memory, and accept the Minecraft EULA. For Fabric, Forge and NeoForge you can list Modrinth mods (slugs or links, one per line): each is checked against the loader and version before anything is created, the server is adopted, and the mods are installed with their required dependencies. A mod that fails after the server exists becomes a warning; install it from the server page. Paper plugins are not managed.
+
 To **create a server from a modpack**, open the Modpacks tab, press **Create server** on a Fabric, Forge or NeoForge pack, choose a version, name, port and memory, and accept the Minecraft EULA. craftyComplete then, in the background:
 
 1. downloads the `.mrpack` and every server file it lists, checking each against the pack's SHA-1/SHA-512, and drops mods Modrinth marks as client-only (nothing is created in Crafty if any of this fails);

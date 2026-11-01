@@ -18,6 +18,7 @@ from crafty_complete.crafty.client import CookielessTransport, CraftyClient, Cra
 from crafty_complete.web.auth_routes import router as auth_router
 from crafty_complete.web.catalog_routes import router as catalog_router
 from crafty_complete.web.control_routes import router as control_router
+from crafty_complete.web.create_routes import router as create_router
 from crafty_complete.web.player_routes import router as player_router
 from crafty_complete.mods.adoption import AdoptionService
 from crafty_complete.mods.installer import ModInstaller
@@ -30,6 +31,7 @@ from crafty_complete.modpacks.linker import ModpackLinker
 from crafty_complete.modpacks.updater import ModpackUpdater
 from crafty_complete.players.service import PlayerService
 from crafty_complete.servers.control import ServerControl
+from crafty_complete.servers.creator import ServerCreator
 from crafty_complete.web.modpack_routes import ProjectRef
 from crafty_complete.web.modpack_routes import router as modpack_router
 from crafty_complete.web.deps import current_session, require_session
@@ -82,8 +84,10 @@ def create_app(
         # the background update check only needs Modrinth and the store.
         adoption = app.state.adoption = AdoptionService(
             app.state.crafty, app.state.catalog, store, locks)
-        app.state.installer = ModInstaller(
+        installer = app.state.installer = ModInstaller(
             app.state.crafty, app.state.catalog, store, adoption, locks)
+        app.state.server_creator = ServerCreator(
+            app.state.crafty, adoption, installer, locks, settings)
         checker = app.state.update_checker = UpdateChecker(
             adoption, store, settings.update_check_hours)
         app.state.modpack_creator = ModpackServerCreator(
@@ -119,6 +123,8 @@ def create_app(
     templates = Jinja2Templates(directory=WEB_DIR / "templates")
     app.include_router(auth_router)
     app.include_router(catalog_router, dependencies=[Depends(require_session)])
+    # Before the /api/servers/{server_id} routes, so "new" is never read as a server id.
+    app.include_router(create_router)
     app.include_router(server_router)
     app.include_router(control_router)
     app.include_router(player_router)
@@ -144,6 +150,11 @@ def create_app(
     @app.get("/modpacks/{project_ref}/create", response_class=HTMLResponse)
     async def create_from_modpack_page(request: Request, project_ref: ProjectRef):
         return page(request, "modpack_create.html", active="browse", project_ref=project_ref)
+
+    # Registered before /servers/{server_id}, which would also match "new".
+    @app.get("/servers/new", response_class=HTMLResponse)
+    async def new_server_page(request: Request):
+        return page(request, "server_new.html", active="servers")
 
     @app.get("/servers/{server_id}", response_class=HTMLResponse)
     async def server_page(request: Request, server_id: ServerId):

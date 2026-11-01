@@ -147,10 +147,37 @@ class ModInstaller:
 
     async def _compatible_version(self, project: dict[str, Any],
                                   server: AdoptedServer) -> dict[str, Any] | None:
+        return await self._version_for(project, server.loader, server.game_version)
+
+    async def _version_for(self, project: dict[str, Any], loader: str,
+                           game_version: str) -> dict[str, Any] | None:
         versions = await self._modrinth.compatible_versions(
-            project["id"], compatible_loaders(server.loader), server.game_version
-        )
+            project["id"], compatible_loaders(loader), game_version)
         return _choose_version(versions)
+
+    async def _server_mod(self, project_ref: str) -> dict[str, Any]:
+        """The Modrinth project, if it is a mod that can run on a server."""
+        try:
+            project = await self._modrinth.project(project_ref)
+        except CatalogNotFound as exc:
+            raise ModOperationError(404, f"Modrinth has no project '{project_ref}'.") from exc
+        title = project["title"]
+        if project.get("project_type") != "mod":
+            kind = project.get("project_type", "something else")
+            raise ModOperationError(422, f"{title} is a {kind}, not a mod.")
+        if project.get("server_side") == "unsupported":
+            raise ModOperationError(
+                422, f"{title} only runs on clients; it cannot be installed on a server.")
+        return project
+
+    async def check_installable(self, project_ref: str, loader: str,
+                                game_version: str) -> dict[str, Any]:
+        """Refuse a mod a new server with this loader and version could not take."""
+        project = await self._server_mod(project_ref)
+        if await self._version_for(project, loader, game_version) is None:
+            raise ModOperationError(
+                422, f"{project['title']} has no version for {loader} {game_version}.")
+        return project
 
     async def _plan_dependencies(self, version: dict[str, Any], server: AdoptedServer,
                                  planned: dict[str, Planned], outcome: Outcome) -> None:
@@ -329,17 +356,8 @@ class ModInstaller:
     async def install(self, token: str, server_id: str, project_ref: str) -> dict:
         async with self._locks(server_id):
             server = await self._adopted(token, server_id)
-            try:
-                project = await self._modrinth.project(project_ref)
-            except CatalogNotFound as exc:
-                raise ModOperationError(404, f"Modrinth has no project '{project_ref}'.") from exc
+            project = await self._server_mod(project_ref)
             title = project["title"]
-            if project.get("project_type") != "mod":
-                kind = project.get("project_type", "something else")
-                raise ModOperationError(422, f"{title} is a {kind}, not a mod.")
-            if project.get("server_side") == "unsupported":
-                raise ModOperationError(
-                    422, f"{title} only runs on clients; it cannot be installed on a server.")
             current = next((m for m in server.mods if m.project_id == project["id"]), None)
             if current:
                 raise ModOperationError(
