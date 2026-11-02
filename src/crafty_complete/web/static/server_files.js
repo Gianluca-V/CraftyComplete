@@ -6,6 +6,8 @@
 let filesLoaded = false;
 // The open file: its path, the content as opened or last saved, and that content's hash.
 let openFile = null;
+// True while a save is in flight: a second one would send the old hash and fail as a conflict.
+let savingFile = false;
 
 function fileDirty() {
   return openFile !== null && $("file-text").value !== openFile.content;
@@ -57,8 +59,8 @@ function setEditorState(message) {
 }
 
 function refreshDirty() {
-  $("file-save").disabled = !fileDirty();
-  setEditorState(fileDirty() ? "Unsaved changes" : "");
+  $("file-save").disabled = savingFile || !fileDirty();
+  if (!savingFile) setEditorState(fileDirty() ? "Unsaved changes" : "");
 }
 
 async function openTextFile(path) {
@@ -79,8 +81,9 @@ async function openTextFile(path) {
 }
 
 async function saveFile() {
-  if (!fileDirty()) return;
+  if (savingFile || !fileDirty()) return;
   const content = $("file-text").value;
+  savingFile = true;
   $("file-save").disabled = true;
   setEditorState("Saving…");
   try {
@@ -88,10 +91,12 @@ async function saveFile() {
       method: "PUT", body: { path: openFile.path, content, sha256: openFile.sha256 },
     });
     openFile = { ...openFile, content, sha256: result.sha256 };
+    savingFile = false;
     showFilesError("");
     refreshDirty();
-    setEditorState("Saved");
+    if (!fileDirty()) setEditorState("Saved");
   } catch (error) {
+    savingFile = false;
     refreshDirty();
     showFilesError(`Not saved: ${error.message}`);
   }
