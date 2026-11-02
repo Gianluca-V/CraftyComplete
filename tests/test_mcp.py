@@ -12,6 +12,10 @@ from tests.conftest import CRAFTY
 from tests.test_control import SERVER as CONTROL_SERVER
 from tests.test_control import FakeCrafty
 from tests.test_create_server import Fakes as WebCreationFakes
+from tests.test_files import PROPERTIES
+from tests.test_files import SERVER as FILES_SERVER
+from tests.test_files import FakeCrafty as FilesCrafty
+from tests.test_files import sha256 as files_sha256
 from tests.test_install import BYTES
 from tests.test_players import SERVER as PLAYERS_SERVER
 from tests.test_players import FakeWorld
@@ -76,7 +80,7 @@ def test_tools_cover_every_feature(tmp_path):
         "list_servers", "server_status", "server_power",
         "adopt_server", "list_mods", "search_mods", "install_mod", "update_mods",
         "check_mod_updates", "mod_versions", "set_mod_version", "pin_mod", "remove_mod",
-        "list_players", "manage_player",
+        "list_players", "manage_player", "list_files", "read_file", "write_file",
         "new_server_options", "create_server", "modpack_versions", "create_modpack_server",
         "modpack_status", "link_modpack", "update_modpack", "job_status",
     }
@@ -291,6 +295,47 @@ def test_player_names_are_checked_by_the_service(tmp_path):
 
     assert "error" in result
     assert world.commands == []
+
+
+# --- files -----------------------------------------------------------------------------
+
+def test_browse_read_and_edit_a_file(tmp_path):
+    crafty = FilesCrafty()
+    server = mcp_server(crafty, tmp_path)
+
+    async def steps(call):
+        listed = await call("list_files", server_id=FILES_SERVER, path="config")
+        opened = await call("read_file", server_id=FILES_SERVER, path="server.properties")
+        saved = await call("write_file", server_id=FILES_SERVER, path="server.properties",
+                           content="motd=Agent\n", sha256=opened["sha256"])
+        return listed, opened, saved
+
+    listed, opened, saved = run(server, steps)
+
+    assert listed["entries"] == [
+        {"name": "sodium.json", "path": "config/sodium.json", "is_dir": False}]
+    assert opened["content"] == PROPERTIES.decode()
+    assert saved["sha256"] == files_sha256(b"motd=Agent\n")
+    assert crafty.files["server.properties"] == b"motd=Agent\n"
+
+
+def test_write_file_refuses_stale_content_and_unsafe_paths(tmp_path):
+    crafty = FilesCrafty()
+    server = mcp_server(crafty, tmp_path)
+
+    async def steps(call):
+        stale = await call("write_file", server_id=FILES_SERVER, path="server.properties",
+                           content="motd=x\n", sha256="0" * 64)
+        escape = await call("read_file", server_id=FILES_SERVER, path="../etc/passwd")
+        return stale, escape
+
+    stale, escape = run(server, steps)
+
+    assert stale == {"error": "server.properties changed on the server since you opened it. "
+                              "Open it again to see the new content."}
+    assert escape == {"error": "'../etc/passwd' is not a valid path inside the server folder."}
+    assert crafty.uploads == []
+    assert crafty.files["server.properties"] == PROPERTIES
 
 
 # --- creating servers ------------------------------------------------------------------

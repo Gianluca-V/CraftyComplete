@@ -9,6 +9,7 @@ import httpx
 from crafty_complete.catalog.modrinth import ModrinthProvider
 from crafty_complete.config import Settings
 from crafty_complete.crafty.client import CookielessTransport, CraftyClient
+from crafty_complete.files.editor import FileEditor
 from crafty_complete.modpacks.creator import ModpackServerCreator
 from crafty_complete.modpacks.jobs import JobRegistry
 from crafty_complete.modpacks.linker import ModpackLinker
@@ -39,6 +40,7 @@ class Services:
     modpack_updater: ModpackUpdater
     control: ServerControl
     players: PlayerService
+    files: FileEditor
     jobs: JobRegistry
 
 
@@ -97,6 +99,7 @@ async def open_services(settings: Settings,
                                        settings),
         control=ServerControl(crafty),
         players=PlayerService(crafty, mojang_http, locks),
+        files=FileEditor(crafty, locks),
         jobs=JobRegistry(),
     )
     try:

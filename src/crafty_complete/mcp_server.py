@@ -27,6 +27,7 @@ from pydantic import Field
 from crafty_complete.catalog.models import CatalogError, SearchQuery
 from crafty_complete.config import Settings
 from crafty_complete.crafty.client import CraftyError
+from crafty_complete.files.editor import MAX_PATH_LENGTH, FileError
 from crafty_complete.modpacks.creator import CreateRequest, CreationRefused
 from crafty_complete.modpacks.packs import describe_failure
 from crafty_complete.mods.adoption import NoModsFolder
@@ -56,6 +57,8 @@ VersionId = Annotated[str, Field(pattern=r"^[A-Za-z0-9_.-]{1,64}$",
                                  description="Modrinth version id")]
 ConfirmToken = Annotated[str | None, Field(
     default=None, description="Token from the first call's plan; omit it to get the plan")]
+FilePath = Annotated[str, Field(max_length=MAX_PATH_LENGTH, description=(
+    "Path relative to the server folder, with / between folders (e.g. config/sodium.json)"))]
 ServerName = Annotated[str, Field(min_length=2, max_length=64, pattern=r"^[^/\\#]*$")]
 Memory = Annotated[float, Field(gt=0, le=256, description="GB")]
 Port = Annotated[int, Field(ge=1, le=65535)]
@@ -122,7 +125,7 @@ def _describe(exc: Exception) -> str:
         if exc.state == "unreachable":
             return "Crafty is unreachable."
         return f"Crafty request failed: {exc.message}"
-    if isinstance(exc, (ModOperationError, PlayerError, CreationRefused)):
+    if isinstance(exc, (ModOperationError, PlayerError, FileError, CreationRefused)):
         return exc.detail
     if isinstance(exc, NoModsFolder):
         return "This server has no mods folder."
@@ -144,7 +147,8 @@ def create_mcp_server(settings: Settings | None = None,
         "craftyComplete",
         instructions=(
             "Control Crafty Controller 4 Minecraft servers: status and power, Modrinth mods "
-            "(with dependencies), players, new servers and modpacks. Tools that stop or kill "
+            "(with dependencies), players, text files, new servers and modpacks. Tools that "
+            "stop or kill "
             "servers, remove mods, ban or kick players or change a modpack version first "
             "return a plan and a confirm_token: show the plan to the user and call again with "
             "the token only if they agree. Long work (creating servers, modpack updates) "
@@ -165,8 +169,8 @@ def create_mcp_server(settings: Settings | None = None,
             return await operation
         except ToolError:
             raise
-        except (CraftyError, CatalogError, ModOperationError, PlayerError, CreationRefused,
-                NoModsFolder) as exc:
+        except (CraftyError, CatalogError, ModOperationError, PlayerError, FileError,
+                CreationRefused, NoModsFolder) as exc:
             raise ToolError(_describe(exc)) from exc
 
     def not_busy(current: McpState, server_id: str) -> None:
@@ -380,6 +384,37 @@ def create_mcp_server(settings: Settings | None = None,
                     "server_id": server_id, "server_running": status["running"]})
             confirmations.redeem("manage_player", arguments, confirm_token)
         return await guarded(players.apply(current.token, server_id, player_action, name, reason))
+
+    # --- files ---------------------------------------------------------------------
+
+    @mcp.tool()
+    async def list_files(server_id: ServerId, ctx: Context,
+                         path: Annotated[FilePath, Field(description=(
+                             "Folder relative to the server folder; empty for the server "
+                             "folder itself"))] = "") -> dict[str, Any]:
+        """Folders and files in one folder of a server."""
+        current = state(ctx)
+        return await guarded(current.services.files.list(current.token, server_id, path))
+
+    @mcp.tool()
+    async def read_file(server_id: ServerId, path: FilePath, ctx: Context) -> dict[str, Any]:
+        """Content of a UTF-8 text file (at most 1 MiB), such as server.properties or a mod
+        config, and the sha256 that write_file needs."""
+        current = state(ctx)
+        return await guarded(current.services.files.read(current.token, server_id, path))
+
+    @mcp.tool()
+    async def write_file(server_id: ServerId, path: FilePath, content: str,
+                         sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$", description=(
+                             "sha256 from read_file; the write is refused if the file "
+                             "changed since"))],
+                         ctx: Context) -> dict[str, Any]:
+        """Replace the whole content of an existing text file. Read it first with read_file.
+        Most files are read when the server starts: restart it to apply the change."""
+        current = state(ctx)
+        not_busy(current, server_id)
+        return await guarded(current.services.files.write(current.token, server_id, path,
+                                                          content, sha256))
 
     # --- new servers and modpacks ----------------------------------------------------
 

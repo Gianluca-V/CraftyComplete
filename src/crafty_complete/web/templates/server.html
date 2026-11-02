@@ -54,6 +54,27 @@
     </div>
   </details>
 
+  <details id="files-panel" class="players-panel files-panel">
+    <summary>Files</summary>
+    <p class="muted">Edit the server's text files, such as <code>server.properties</code> or mod
+      configs in <code>config/</code>. Most files are read when the server starts: restart it to
+      apply your changes.</p>
+    <nav id="files-crumbs" class="files-crumbs" aria-label="Folder"></nav>
+    <ul id="files-list" class="files-list"></ul>
+    <p id="files-error" class="error"></p>
+    <section id="file-editor" class="file-editor" aria-labelledby="file-editor-path" hidden>
+      <div class="file-editor-head">
+        <code id="file-editor-path"></code>
+        <span id="file-editor-state" class="muted" role="status" aria-live="polite"></span>
+        <span class="toolbar-spacer"></span>
+        <button id="file-save" class="primary compact" type="button" disabled>Save</button>
+        <button id="file-close" class="ghost compact" type="button">Close</button>
+      </div>
+      <textarea id="file-text" class="file-text" spellcheck="false" autocomplete="off"
+                autocapitalize="off" aria-labelledby="file-editor-path"></textarea>
+    </section>
+  </details>
+
   <section class="toolbar" aria-label="Scan settings">
     <label class="inline-field">
       Loader
@@ -152,4 +173,5 @@
 <script src="{{ url_for('static', path='server_control.js') }}"></script>
 <script src="{{ url_for('static', path='server_mod_actions.js') }}"></script>
 <script src="{{ url_for('static', path='server_players.js') }}"></script>
+<script src="{{ url_for('static', path='server_files.js') }}"></script>
 {% endblock %}

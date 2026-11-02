@@ -434,6 +434,50 @@ input[type="search"]:focus, select:focus, button:focus-visible {
 .player-list li { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .player-list .player-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .player-list .empty { color: var(--muted); }
+.files-panel > p.muted { margin: 0 0 10px; }
+.files-crumbs { display: flex; flex-wrap: wrap; gap: 0 4px; margin-bottom: 8px; color: var(--muted); }
+.files-crumbs [aria-current] { color: var(--text); font-weight: 600; overflow-wrap: anywhere; }
+.crumb, .file-entry {
+  background: none;
+  border: 0;
+  padding: 2px 0;
+  cursor: pointer;
+  text-align: left;
+}
+.crumb { color: var(--accent); }
+.crumb:hover, .file-entry:hover { text-decoration: underline; }
+.files-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 2px 16px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.files-list .empty { color: var(--muted); }
+.file-entry { display: flex; gap: 6px; width: 100%; min-width: 0; overflow-wrap: anywhere; }
+.file-icon { color: var(--muted); width: 1ch; flex: none; }
+.file-editor { margin-top: 14px; display: grid; gap: 8px; }
+.file-editor-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.file-editor-head code { overflow-wrap: anywhere; }
+.file-text {
+  width: 100%;
+  min-height: 360px;
+  resize: vertical;
+  padding: 10px 12px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  tab-size: 4;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+}
+.file-text:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .create-form textarea { font: inherit; color: inherit; resize: vertical; min-width: 0; }
 .create-form .field[hidden] { display: none; }
 .page-head .link-button { margin-top: 8px; display: inline-block; }

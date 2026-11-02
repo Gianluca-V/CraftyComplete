@@ -19,6 +19,7 @@ from crafty_complete.web.auth_routes import router as auth_router
 from crafty_complete.web.catalog_routes import router as catalog_router
 from crafty_complete.web.control_routes import router as control_router
 from crafty_complete.web.create_routes import router as create_router
+from crafty_complete.web.file_routes import router as file_router
 from crafty_complete.web.player_routes import router as player_router
 from crafty_complete.web.modpack_routes import ProjectRef
 from crafty_complete.web.modpack_routes import router as modpack_router
@@ -66,6 +67,7 @@ def create_app(
     app.include_router(server_router)
     app.include_router(control_router)
     app.include_router(player_router)
+    app.include_router(file_router)
     app.include_router(modpack_router)
 
     def page(request: Request, template: str, **context):
