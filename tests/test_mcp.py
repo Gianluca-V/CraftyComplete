@@ -11,6 +11,11 @@ from crafty_complete.mcp_server import create_mcp_server
 from tests.conftest import CRAFTY
 from tests.test_control import SERVER as CONTROL_SERVER
 from tests.test_control import FakeCrafty
+from tests.test_backups import DEFAULT as DEFAULT_BACKUP
+from tests.test_backups import NIGHTLY as NIGHTLY_BACKUP
+from tests.test_backups import SERVER as BACKUP_SERVER
+from tests.test_backups import FakeCrafty as BackupCrafty
+from tests.test_backups import config as backup_config
 from tests.test_create_server import Fakes as WebCreationFakes
 from tests.test_files import PROPERTIES
 from tests.test_files import SERVER as FILES_SERVER
@@ -81,6 +86,7 @@ def test_tools_cover_every_feature(tmp_path):
         "adopt_server", "list_mods", "search_mods", "install_mod", "update_mods",
         "check_mod_updates", "mod_versions", "set_mod_version", "pin_mod", "remove_mod",
         "list_players", "manage_player", "list_files", "read_file", "write_file",
+        "list_backups", "create_backup",
         "new_server_options", "create_server", "modpack_versions", "create_modpack_server",
         "modpack_status", "link_modpack", "update_modpack", "job_status",
     }
@@ -336,6 +342,46 @@ def test_write_file_refuses_stale_content_and_unsafe_paths(tmp_path):
     assert escape == {"error": "'../etc/passwd' is not a valid path inside the server folder."}
     assert crafty.uploads == []
     assert crafty.files["server.properties"] == PROPERTIES
+
+
+# --- backups ---------------------------------------------------------------------------
+
+def test_list_backups_and_back_up_with_the_default_config(tmp_path):
+    crafty = BackupCrafty()
+    server = mcp_server(crafty, tmp_path)
+
+    async def steps(call):
+        listed = await call("list_backups", server_id=BACKUP_SERVER)
+        started = await call("create_backup", server_id=BACKUP_SERVER)
+        return listed, started
+
+    listed, started = run(server, steps)
+
+    assert [b["created"] for b in listed["configs"][0]["backups"]] == [
+        "2026-11-01T09:00:00", "2026-10-30T14:05:09"]
+    assert started["started"] is True
+    assert crafty.actions == [DEFAULT_BACKUP]
+
+
+def test_a_backup_that_stops_the_server_needs_confirmation(tmp_path):
+    crafty = BackupCrafty()
+    crafty.configs[NIGHTLY_BACKUP] = backup_config(NIGHTLY_BACKUP, "Nightly", shutdown=True)
+    server = mcp_server(crafty, tmp_path)
+
+    async def steps(call):
+        plan = await call("create_backup", server_id=BACKUP_SERVER, backup_id=NIGHTLY_BACKUP)
+        actions_before = list(crafty.actions)
+        done = await call("create_backup", server_id=BACKUP_SERVER, backup_id=NIGHTLY_BACKUP,
+                          confirm_token=plan["confirm_token"])
+        return plan, actions_before, done
+
+    plan, actions_before, done = run(server, steps)
+
+    assert plan["plan"] == {"backup_id": NIGHTLY_BACKUP, "name": "Nightly",
+                            "stops_server": True, "server_id": BACKUP_SERVER}
+    assert actions_before == []
+    assert done["started"] is True
+    assert crafty.actions == [NIGHTLY_BACKUP]
 
 
 # --- creating servers ------------------------------------------------------------------

@@ -10,8 +10,8 @@
   <header class="topbar">
     <a class="brand" href="/">crafty<span>Complete</span></a>
     <nav class="main-nav" aria-label="Main">
-      <a href="/" {% if active == "browse" %}aria-current="page"{% endif %}>Browse</a>
       <a href="/servers" {% if active == "servers" %}aria-current="page"{% endif %}>Servers</a>
+      <a href="/browse" {% if active == "browse" %}aria-current="page"{% endif %}>Browse</a>
     </nav>
     {% block header_extra %}{% endblock %}
     <div class="account">

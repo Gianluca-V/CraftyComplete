@@ -33,6 +33,7 @@ from crafty_complete.modpacks.packs import describe_failure
 from crafty_complete.mods.adoption import NoModsFolder
 from crafty_complete.mods.installer import ModOperationError
 from crafty_complete.players.service import PlayerAction, PlayerError
+from crafty_complete.servers.backups import BackupError
 from crafty_complete.servers.control import NEEDS_IDLE_SERVER, PowerAction
 from crafty_complete.servers.creator import KINDS, NewServerRequest
 from crafty_complete.services import Services, open_services
@@ -125,7 +126,8 @@ def _describe(exc: Exception) -> str:
         if exc.state == "unreachable":
             return "Crafty is unreachable."
         return f"Crafty request failed: {exc.message}"
-    if isinstance(exc, (ModOperationError, PlayerError, FileError, CreationRefused)):
+    if isinstance(exc, (ModOperationError, PlayerError, FileError, BackupError,
+                        CreationRefused)):
         return exc.detail
     if isinstance(exc, NoModsFolder):
         return "This server has no mods folder."
@@ -147,8 +149,8 @@ def create_mcp_server(settings: Settings | None = None,
         "craftyComplete",
         instructions=(
             "Control Crafty Controller 4 Minecraft servers: status and power, Modrinth mods "
-            "(with dependencies), players, text files, new servers and modpacks. Tools that "
-            "stop or kill "
+            "(with dependencies), players, text files, backups, new servers and modpacks. "
+            "Tools that stop or kill "
             "servers, remove mods, ban or kick players or change a modpack version first "
             "return a plan and a confirm_token: show the plan to the user and call again with "
             "the token only if they agree. Long work (creating servers, modpack updates) "
@@ -170,7 +172,7 @@ def create_mcp_server(settings: Settings | None = None,
         except ToolError:
             raise
         except (CraftyError, CatalogError, ModOperationError, PlayerError, FileError,
-                CreationRefused, NoModsFolder) as exc:
+                BackupError, CreationRefused, NoModsFolder) as exc:
             raise ToolError(_describe(exc)) from exc
 
     def not_busy(current: McpState, server_id: str) -> None:
@@ -415,6 +417,36 @@ def create_mcp_server(settings: Settings | None = None,
         not_busy(current, server_id)
         return await guarded(current.services.files.write(current.token, server_id, path,
                                                           content, sha256))
+
+    # --- backups -------------------------------------------------------------------
+
+    @mcp.tool()
+    async def list_backups(server_id: ServerId, ctx: Context) -> dict[str, Any]:
+        """The server's Crafty backup configurations and their zip backups, newest first.
+        `created` is in the Crafty server's local time."""
+        current = state(ctx)
+        return await guarded(current.services.backups.list(current.token, server_id))
+
+    @mcp.tool()
+    async def create_backup(server_id: ServerId, ctx: Context,
+                            backup_id: Annotated[str | None, Field(
+                                default=None, pattern=r"^[a-z0-9-]{1,64}$",
+                                description="Backup configuration id from list_backups; omit "
+                                            "it for the default one")] = None,
+                            confirm_token: ConfirmToken = None) -> dict[str, Any]:
+        """Ask Crafty to make a backup now; it appears in list_backups when it finishes.
+        A configuration that stops the server while it runs needs confirmation."""
+        current = state(ctx)
+        not_busy(current, server_id)
+        backups = current.services.backups
+        chosen = await guarded(backups.plan(current.token, server_id, backup_id))
+        if chosen["stops_server"]:
+            arguments = {"server_id": server_id, "backup_id": chosen["backup_id"]}
+            if confirm_token is None:
+                return confirmations.issue("create_backup", arguments,
+                                           {**chosen, "server_id": server_id})
+            confirmations.redeem("create_backup", arguments, confirm_token)
+        return await guarded(backups.start(current.token, server_id, chosen["backup_id"]))
 
     # --- new servers and modpacks ----------------------------------------------------
 

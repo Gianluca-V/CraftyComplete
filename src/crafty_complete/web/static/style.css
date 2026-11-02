@@ -434,6 +434,13 @@ input[type="search"]:focus, select:focus, button:focus-visible {
 .player-list li { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .player-list .player-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .player-list .empty { color: var(--muted); }
+.backup-head { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+.backups-panel > p.muted { margin: 10px 0 0; }
+.backups-panel > p.muted:empty { display: none; }
+.backup-config { margin-top: 12px; }
+.backup-config h3 { margin: 0 0 6px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.backup-list li { flex-wrap: wrap; gap: 4px 12px; }
+.backup-date { font-variant-numeric: tabular-nums; }
 .files-panel > p.muted { margin: 0 0 10px; }
 .files-crumbs { display: flex; flex-wrap: wrap; gap: 0 4px; margin-bottom: 8px; color: var(--muted); }
 .files-crumbs [aria-current] { color: var(--text); font-weight: 600; overflow-wrap: anywhere; }

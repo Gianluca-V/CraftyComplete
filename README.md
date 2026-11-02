@@ -13,7 +13,7 @@ python -m venv .venv
 .venv/Scripts/python -m uvicorn crafty_complete.main:app --port 8500
 ```
 
-Open http://localhost:8500, log in with your Crafty account and browse Modrinth mods and modpacks. Under **Servers**, open a server and press **Adopt server** to identify the mods it already has and see which ones have updates. Then:
+Open http://localhost:8500 and log in with your Crafty account: the home page is the **Servers** list, and **Browse** searches Modrinth mods and modpacks. Open a server and press **Adopt server** to identify the mods it already has and see which ones have updates. Then:
 
 - **Install** a mod from the browse page (pick the server under "Install to"); its missing required dependencies are installed too.
 - **Update** one mod, or **Update all** unpinned mods, from the server page.
@@ -28,6 +28,8 @@ The **Servers** list shows whether each server is running and how many players a
 The **Players** panel on the server page lists who is online, the whitelist, the operators and the banned players, and adds or removes players from each list (whitelist, op/deop, ban/pardon) or kicks them. While the server runs, changes are sent as console commands (Crafty's Commands permission). While it is stopped, craftyComplete edits `whitelist.json`, `ops.json` and `banned-players.json` (Files permission) and the change applies on the next start; new entries get the player's UUID from Mojang, or the offline UUID when `server.properties` sets `online-mode=false`. Kick needs a running server.
 
 The **Files** panel on the server page browses the server's folders and edits its text files in the browser, such as `server.properties`, `options.txt` or mod configs in `config/` (Crafty's Files permission). Only UTF-8 text files up to 1 MiB open; jars and other binary files are refused, and files whose path has non-ASCII characters open but cannot be saved (Crafty's upload takes the name in an HTTP header). **Save** (or Ctrl+S) replaces the file, keeping its Windows line endings if it had them. Saving is refused when the file changed on the server since you opened it (open it again to see the new content) and while a modpack update is changing the server's files. Most files are read when the server starts, so restart it to apply your changes.
+
+The **Backups** panel on the server page lists the backups Crafty has made of the server, newest first, with their date in the Crafty server's local time (Crafty's Backup permission). **Back up now** asks Crafty to make one with the server's default backup configuration, or the one you choose when there are several (Commands permission); create configurations in the Crafty panel. A configuration that stops the server while it runs asks you to confirm first. Crafty does not report when a backup finishes: press **Refresh** to see it. Backing up is refused while a modpack update is changing the server's files. Snapshot backups are not listed, only zip backups.
 
 To **create a server without a modpack**, press **New server** on the Servers page. Choose Vanilla, Paper, Fabric, Forge or NeoForge and one of the Minecraft versions Crafty offers for it, then a name, port and memory, and accept the Minecraft EULA. For Fabric, Forge and NeoForge you can list Modrinth mods (slugs or links, one per line): each is checked against the loader and version before anything is created, the server is adopted, and the mods are installed with their required dependencies. A mod that fails after the server exists becomes a warning; install it from the server page. Paper plugins are not managed.
 
@@ -126,7 +128,7 @@ Server endpoints check, with your own Crafty token, that you have Crafty's **Fil
 
 ## MCP server
 
-`crafty-complete-mcp` is an [MCP](https://modelcontextprotocol.io) server that lets an AI agent do everything the web app does: list servers and their status, start and stop them, adopt them, search, install, update, pin, version and remove mods, manage players, read and edit text files, create vanilla, Paper, mod-loader and modpack servers, and link or update modpacks. It runs as a local stdio process started by the MCP client and shares the web app's code and SQLite database.
+`crafty-complete-mcp` is an [MCP](https://modelcontextprotocol.io) server that lets an AI agent do everything the web app does: list servers and their status, start and stop them, adopt them, search, install, update, pin, version and remove mods, manage players, read and edit text files, list and make backups, create vanilla, Paper, mod-loader and modpack servers, and link or update modpacks. It runs as a local stdio process started by the MCP client and shares the web app's code and SQLite database.
 
 It acts with one Crafty API token (create one in the Crafty panel under your user's API keys), so Crafty enforces that user's permissions. Keep the token out of shared config files and give it to a user with only the permissions the agent needs.
 
@@ -149,7 +151,7 @@ Example for Claude Desktop (`claude_desktop_config.json`) or Claude Code (`.mcp.
 
 On Linux the command is `.venv/bin/crafty-complete-mcp`. Point `CRAFTY_COMPLETE_DATABASE_PATH` at the web app's database so both see the same adopted servers.
 
-Tools that stop, restart or kill a server, remove a mod, ban or kick a player, or move a server to another modpack version take two calls. The first returns a `plan` and a `confirm_token`; the agent should show the plan to you and call again with the same arguments plus the token only if you agree. A token works once, for that tool and those arguments, for 5 minutes. Creating a server requires `accept_minecraft_eula: true`, which the agent should only send after you accept the EULA. Long work returns a `job_id` to follow with `job_status`; jobs live as long as the MCP server process, one at a time. `write_file` replaces a whole text file and needs the `sha256` that `read_file` returned, so it fails instead of overwriting a file that changed since the agent read it.
+Tools that stop, restart or kill a server, remove a mod, ban or kick a player, make a backup with a configuration that stops the server, or move a server to another modpack version take two calls. The first returns a `plan` and a `confirm_token`; the agent should show the plan to you and call again with the same arguments plus the token only if you agree. A token works once, for that tool and those arguments, for 5 minutes. Creating a server requires `accept_minecraft_eula: true`, which the agent should only send after you accept the EULA. Long work returns a `job_id` to follow with `job_status`; jobs live as long as the MCP server process, one at a time. `write_file` replaces a whole text file and needs the `sha256` that `read_file` returned, so it fails instead of overwriting a file that changed since the agent read it.
 
 The MCP server and the web app are separate processes: a modpack update running in one does not block mod changes started from the other, so avoid changing the same server from both at once.
 

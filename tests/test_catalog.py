@@ -256,7 +256,7 @@ def test_index_page_renders_search_view():
         raise AssertionError("page render must not call Modrinth")
 
     with make_client(handler) as client:
-        response = client.get("/")
+        response = client.get("/browse")
 
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]

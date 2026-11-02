@@ -75,6 +75,21 @@
     </section>
   </details>
 
+  <details id="backups-panel" class="players-panel backups-panel">
+    <summary>Backups</summary>
+    <div class="backup-head">
+      <label class="inline-field" id="backup-config-field" hidden>
+        Backup configuration
+        <select id="backup-config"></select>
+      </label>
+      <button id="backup-now" class="primary compact" type="button" disabled>Back up now</button>
+      <button id="backups-refresh" class="ghost compact" type="button">Refresh</button>
+    </div>
+    <p id="backups-info" class="muted" role="status" aria-live="polite"></p>
+    <p id="backups-error" class="error"></p>
+    <div id="backup-lists"></div>
+  </details>
+
   <section class="toolbar" aria-label="Scan settings">
     <label class="inline-field">
       Loader
@@ -110,7 +125,7 @@
       </div>
       <p class="muted">Stop the server in Crafty first. Replaced and removed files are moved to
         <code>.crafty-complete/backups</code>; mods you added yourself stay installed.
-        <a href="/">Add more mods</a></p>
+        <a href="/browse">Add more mods</a></p>
     </div>
     <form id="modpack-link-form" hidden>
       <p class="muted">Link this server to the Modrinth modpack it runs to update it as a whole.</p>
@@ -174,4 +189,5 @@
 <script src="{{ url_for('static', path='server_mod_actions.js') }}"></script>
 <script src="{{ url_for('static', path='server_players.js') }}"></script>
 <script src="{{ url_for('static', path='server_files.js') }}"></script>
+<script src="{{ url_for('static', path='server_backups.js') }}"></script>
 {% endblock %}

@@ -16,6 +16,7 @@ from crafty_complete.config import Settings
 from crafty_complete.crafty.client import CraftyClient, CraftyStatus
 from crafty_complete.services import open_services
 from crafty_complete.web.auth_routes import router as auth_router
+from crafty_complete.web.backup_routes import router as backup_router
 from crafty_complete.web.catalog_routes import router as catalog_router
 from crafty_complete.web.control_routes import router as control_router
 from crafty_complete.web.create_routes import router as create_router
@@ -68,6 +69,7 @@ def create_app(
     app.include_router(control_router)
     app.include_router(player_router)
     app.include_router(file_router)
+    app.include_router(backup_router)
     app.include_router(modpack_router)
 
     def page(request: Request, template: str, **context):
@@ -79,13 +81,15 @@ def create_app(
             {"version": __version__, "username": session.username, **context},
         )
 
+    # The servers list is the home page; /servers stays for existing links.
     @app.get("/", response_class=HTMLResponse)
-    async def index(request: Request):
-        return page(request, "index.html", active="browse")
-
     @app.get("/servers", response_class=HTMLResponse)
     async def servers_page(request: Request):
         return page(request, "servers.html", active="servers")
+
+    @app.get("/browse", response_class=HTMLResponse)
+    async def browse_page(request: Request):
+        return page(request, "index.html", active="browse")
 
     @app.get("/modpacks/{project_ref}/create", response_class=HTMLResponse)
     async def create_from_modpack_page(request: Request, project_ref: ProjectRef):

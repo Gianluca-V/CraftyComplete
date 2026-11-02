@@ -309,6 +309,27 @@ class CraftyClient:
             raise CraftyError("unreachable", str(exc)) from exc
         return bytes(data)
 
+    async def _get_bare(self, path: str, token: str) -> Any:
+        """GET an endpoint that answers its data without Crafty's {"status": "ok"} envelope."""
+        try:
+            response = await self._http.get(path, headers={"Authorization": f"Bearer {token}"})
+        except httpx.HTTPError as exc:
+            raise CraftyError("unreachable", str(exc)) from exc
+        body = _json(response)
+        if response.status_code >= 400 or body.get("status") == "error":
+            self._raise_for(response, body)
+        return body
+
+    async def backup_configs(self, token: str, server_id: str) -> dict[str, Any]:
+        """The server's backup configurations, keyed by backup id. Needs BACKUP."""
+        return await self._get_bare(f"/api/v2/servers/{server_id}/backups", token)
+
+    async def backup_archives(self, token: str, server_id: str, backup_id: str) -> list[str]:
+        """Full paths, on the Crafty host, of one configuration's zip backups. Needs BACKUP."""
+        body = await self._get_bare(
+            f"/api/v2/servers/{server_id}/backups/backup/{backup_id}/files", token)
+        return [str(path) for path in body.get("backups") or []]
+
     async def server_action(self, token: str, server_id: str, action: str) -> None:
         """Run a Crafty server action such as start_server. Needs the COMMANDS permission."""
         await self._request("POST", f"/api/v2/servers/{server_id}/action/{action}", token)

@@ -686,7 +686,7 @@ def test_server_page_offers_update_all(session):
 
 
 def test_browse_page_offers_install_target(session):
-    page = session.client.get("/").text
+    page = session.client.get("/browse").text
 
     assert 'id="target-server"' in page
 

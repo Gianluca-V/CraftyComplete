@@ -20,6 +20,7 @@ from crafty_complete.mods.locks import ServerLocks
 from crafty_complete.mods.store import AdoptionStore
 from crafty_complete.mods.update_checker import UpdateChecker
 from crafty_complete.players.service import PlayerService
+from crafty_complete.servers.backups import BackupService
 from crafty_complete.servers.control import ServerControl
 from crafty_complete.servers.creator import ServerCreator
 
@@ -41,6 +42,7 @@ class Services:
     control: ServerControl
     players: PlayerService
     files: FileEditor
+    backups: BackupService
     jobs: JobRegistry
 
 
@@ -100,6 +102,7 @@ async def open_services(settings: Settings,
         control=ServerControl(crafty),
         players=PlayerService(crafty, mojang_http, locks),
         files=FileEditor(crafty, locks),
+        backups=BackupService(crafty),
         jobs=JobRegistry(),
     )
     try:
