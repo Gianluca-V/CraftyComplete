@@ -29,6 +29,8 @@ class FakeCrafty:
         ]}
         self.backup_forbidden = False
         self.commands_forbidden = False
+        # Crafty before 4.10.5 (e.g. 4.7.0) has no GET on the backup files route.
+        self.lists_archives = True
         self.actions: list[str] = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -41,6 +43,9 @@ class FakeCrafty:
             return denied if self.backup_forbidden else httpx.Response(200, json=self.configs)
         if (path.startswith(f"{base}/backups/backup/") and path.endswith("/files")
                 and request.method == "GET"):
+            if not self.lists_archives:
+                return httpx.Response(405, json={"status": "error",
+                                                 "error": "METHOD_NOT_ALLOWED"})
             if self.backup_forbidden:
                 return denied
             backup_id = path.split("/")[-2]
@@ -70,7 +75,7 @@ def test_lists_backups_newest_first_with_their_date(crafty):
         response = client.get(BACKUPS)
 
     assert response.status_code == 200
-    assert response.json() == {"configs": [{
+    assert response.json() == {"archives_listed": True, "configs": [{
         "backup_id": DEFAULT, "name": "Default Backup", "default": True,
         "type": "zip_vault", "stops_server": False,
         "backups": [
@@ -78,6 +83,20 @@ def test_lists_backups_newest_first_with_their_date(crafty):
             {"file": "2026-10-30_14-05-09.zip", "created": "2026-10-30T14:05:09"},
         ],
     }]}
+
+
+def test_crafty_without_the_backup_files_api_still_lists_configs_and_backs_up(crafty):
+    crafty.lists_archives = False
+    with client_for(crafty) as client:
+        listed = client.get(BACKUPS)
+        started = client.post(BACKUPS, json={})
+
+    assert listed.status_code == 200
+    assert listed.json() == {"archives_listed": False, "configs": [{
+        "backup_id": DEFAULT, "name": "Default Backup", "default": True,
+        "type": "zip_vault", "stops_server": False, "backups": None}]}
+    assert started.status_code == 200
+    assert crafty.actions == [DEFAULT]
 
 
 def test_default_config_comes_first_and_odd_names_have_no_date():

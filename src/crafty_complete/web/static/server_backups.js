@@ -4,6 +4,7 @@
 
 let backupsLoaded = false;
 let backupConfigs = [];
+let archivesListed = true;
 
 // Crafty names backups with its own local time and no timezone: show it as written.
 function backupDate(created) {
@@ -20,6 +21,13 @@ function renderBackups() {
   $("backup-config-field").hidden = backupConfigs.length < 2;
   $("backup-now").disabled = backupConfigs.length === 0;
 
+  if (!archivesListed) {
+    $("backup-lists").replaceChildren(el("p", { class: "muted" },
+      "This Crafty version cannot list backup files through its API (Crafty 4.10.5 or newer " +
+      "can). See them in the Crafty panel, in the server's Backups tab."));
+    $("backups-info").textContent = "";
+    return;
+  }
   $("backup-lists").replaceChildren(...backupConfigs.map((config) => {
     const items = config.backups.map((backup) => el("li", {},
       el("span", { class: "backup-date" }, backupDate(backup.created)),
@@ -39,7 +47,9 @@ function renderBackups() {
 
 async function loadBackups() {
   try {
-    backupConfigs = (await api(`${base}/backups`)).configs;
+    const data = await api(`${base}/backups`);
+    backupConfigs = data.configs;
+    archivesListed = data.archives_listed;
     $("backups-error").textContent = "";
     renderBackups();
     backupsLoaded = true;
@@ -57,8 +67,9 @@ async function backupNow() {
   $("backups-error").textContent = "";
   try {
     await api(`${base}/backups`, { method: "POST", body: { backup_id: config.backup_id } });
-    $("backups-info").textContent =
-      "Crafty is making the backup. It appears in the list when it finishes; press Refresh.";
+    $("backups-info").textContent = archivesListed
+      ? "Crafty is making the backup. It appears in the list when it finishes; press Refresh."
+      : "Crafty is making the backup. See it in the Crafty panel when it finishes.";
   } catch (error) {
     $("backups-error").textContent = `Backup not started: ${error.message}`;
   } finally {

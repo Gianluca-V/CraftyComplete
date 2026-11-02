@@ -60,6 +60,10 @@
       configs in <code>config/</code>. Most files are read when the server starts: restart it to
       apply your changes.</p>
     <nav id="files-crumbs" class="files-crumbs" aria-label="Folder"></nav>
+    <label class="inline-field files-search">
+      Search this folder
+      <input id="files-search" type="search" autocomplete="off" placeholder="File name">
+    </label>
     <ul id="files-list" class="files-list"></ul>
     <p id="files-error" class="error"></p>
     <section id="file-editor" class="file-editor" aria-labelledby="file-editor-path" hidden>
@@ -156,6 +160,20 @@
   <p id="status" class="status" role="status" aria-live="polite"></p>
   <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
 
+  <section id="mods-tools" class="mods-tools" aria-label="Mods" hidden>
+    <label class="inline-field">
+      Search mods
+      <input id="mod-search" type="search" autocomplete="off" placeholder="Name or file">
+    </label>
+    <span id="mod-search-count" class="muted" role="status" aria-live="polite"></span>
+    <div id="mod-drop" class="mod-drop">
+      <span>Drop <code>.jar</code> files here to add them to <code>mods/</code>, or</span>
+      <button id="mod-pick" class="ghost compact" type="button">Choose files</button>
+      <input id="mod-file" type="file" accept=".jar" multiple hidden>
+    </div>
+    <ul id="upload-results" class="upload-results" aria-live="polite"></ul>
+  </section>
+
   <div class="table-wrap">
     <table id="mod-table" class="mod-table" hidden>
       <thead>
@@ -190,4 +208,5 @@
 <script src="{{ url_for('static', path='server_players.js') }}"></script>
 <script src="{{ url_for('static', path='server_files.js') }}"></script>
 <script src="{{ url_for('static', path='server_backups.js') }}"></script>
+<script src="{{ url_for('static', path='server_mod_upload.js') }}"></script>
 {% endblock %}

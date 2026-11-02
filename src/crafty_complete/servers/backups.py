@@ -51,27 +51,43 @@ class BackupService:
         configs.sort(key=lambda c: (not c.get("default"), str(c.get("backup_name", "")).casefold()))
         return configs
 
+    async def _archives(self, token: str, server_id: str,
+                        backup_id: str) -> list[dict[str, Any]] | None:
+        """One configuration's zip backups, newest first; None when Crafty cannot list them."""
+        try:
+            paths = await self._crafty.backup_archives(token, server_id, backup_id)
+        except CraftyError as exc:
+            if exc.state == "forbidden":
+                raise BackupError(403, BACKUP_FORBIDDEN) from exc
+            # Crafty before 4.10.5 has no GET on this route (405 METHOD_NOT_ALLOWED).
+            if exc.state == "error" and exc.message == "METHOD_NOT_ALLOWED":
+                return None
+            raise
+        archives = [_archive(path) for path in paths]
+        # Names Crafty did not date go last.
+        archives.sort(key=lambda a: (a["created"] is not None, a["created"] or ""),
+                      reverse=True)
+        return archives
+
     async def list(self, token: str, server_id: str) -> dict[str, Any]:
         listed = []
+        archives_listed = True
         for config in await self._configs(token, server_id):
             backup_id = str(config["backup_id"])
-            try:
-                paths = await self._crafty.backup_archives(token, server_id, backup_id)
-            except CraftyError as exc:
-                if exc.state == "forbidden":
-                    raise BackupError(403, BACKUP_FORBIDDEN) from exc
-                raise
-            archives = [_archive(path) for path in paths]
-            # Newest first; names Crafty did not date go last.
-            archives.sort(key=lambda a: (a["created"] is not None, a["created"] or ""),
-                          reverse=True)
+            archives = None
+            if archives_listed:
+                archives = await self._archives(token, server_id, backup_id)
+                archives_listed = archives is not None
             listed.append({
                 "backup_id": backup_id, "name": config.get("backup_name") or backup_id,
                 "default": bool(config.get("default")),
                 "type": config.get("backup_type") or "zip_vault",
                 "stops_server": bool(config.get("shutdown")), "backups": archives,
             })
-        return {"configs": listed}
+        if not archives_listed:
+            for config in listed:
+                config["backups"] = None
+        return {"archives_listed": archives_listed, "configs": listed}
 
     async def plan(self, token: str, server_id: str,
                    backup_id: str | None = None) -> dict[str, Any]:

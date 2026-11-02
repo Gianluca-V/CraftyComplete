@@ -33,8 +33,22 @@ function renderCrumbs(path) {
   }));
 }
 
+/** Show only the entries of the open folder whose name contains the search text. */
+function filterFiles() {
+  const query = $("files-search").value.trim().toLowerCase();
+  let shown = 0;
+  for (const item of $("files-list").children) {
+    const name = item.dataset.name;
+    if (name === undefined) continue;
+    item.hidden = Boolean(query) && !name.includes(query);
+    if (!item.hidden) shown += 1;
+  }
+  $("files-no-match").hidden = !query || shown > 0;
+}
+
 async function loadFolder(path) {
   showFilesError("");
+  $("files-search").value = "";
   try {
     const data = await api(`${base}/files?path=${encodeURIComponent(path)}`);
     renderCrumbs(data.path);
@@ -44,10 +58,11 @@ async function loadFolder(path) {
         entry.is_dir ? `${entry.name}/` : entry.name);
       button.addEventListener("click", () =>
         entry.is_dir ? loadFolder(entry.path) : openTextFile(entry.path));
-      return el("li", {}, button);
+      return el("li", { "data-name": entry.name.toLowerCase() }, button);
     });
     $("files-list").replaceChildren(
-      ...(items.length ? items : [el("li", { class: "empty" }, "This folder is empty.")]));
+      ...(items.length ? items : [el("li", { class: "empty" }, "This folder is empty.")]),
+      el("li", { class: "empty", id: "files-no-match", hidden: "" }, "No file matches."));
     filesLoaded = true;
   } catch (error) {
     showFilesError(`Could not list the folder: ${error.message}`);
@@ -110,6 +125,7 @@ function closeFile() {
   showFilesError("");
 }
 
+$("files-search").addEventListener("input", filterFiles);
 $("file-text").addEventListener("input", refreshDirty);
 $("file-text").addEventListener("keydown", (event) => {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {

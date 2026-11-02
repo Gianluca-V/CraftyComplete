@@ -69,7 +69,8 @@ function renderMod(mod) {
   remove.addEventListener("click", () => openRemoveDialog(mod));
   actions.append(" ", remove);
 
-  return el("tr", {},
+  return el("tr", { "data-search": [mod.title, mod.slug, mod.file_name].filter(Boolean)
+    .join(" ").toLowerCase() },
     el("td", {},
       el("div", { class: "mod-name" }, icon,
         el("div", {}, name, el("div", { class: "file-name" }, mod.file_name)))),
@@ -78,8 +79,21 @@ function renderMod(mod) {
     actions);
 }
 
+/** Show only the mod rows whose name, slug or file name contain the search text. */
+function filterMods() {
+  const query = $("mod-search").value.trim().toLowerCase();
+  const rows = [...$("mod-rows").rows];
+  let shown = 0;
+  for (const row of rows) {
+    row.hidden = Boolean(query) && !row.dataset.search.includes(query);
+    if (!row.hidden) shown += 1;
+  }
+  $("mod-search-count").textContent = query ? `${shown} of ${rows.length} mods` : "";
+}
+
 function render(data) {
   $("scan").textContent = data.adopted ? "Rescan" : "Adopt server";
+  $("mods-tools").hidden = !data.adopted;
   if (data.loader) $("loader").value = data.loader;
   if (data.game_version) $("game-version").value = data.game_version;
 
@@ -110,6 +124,7 @@ function render(data) {
     el("span", {}, el("strong", {}, String(c.pinned)), " pinned"));
   $("summary").hidden = false;
   $("mod-rows").replaceChildren(...data.mods.map(renderMod));
+  filterMods();
   $("mod-table").hidden = data.mods.length === 0;
   if (!data.mods.length) setStatus("The mods folder has no .jar files.");
 }
@@ -330,6 +345,7 @@ async function init() {
   $("modpack-update").addEventListener("click", () =>
     startJob(`${base}/modpack/update`, { version_id: $("modpack-version").value }));
   $("scan").addEventListener("click", scan);
+  $("mod-search").addEventListener("input", filterMods);
   $("check-updates").addEventListener("click", checkUpdates);
   $("update-all").addEventListener("click", () =>
     runAction($("update-all"), `${base}/update-all`, "Updating every unpinned mod…"));

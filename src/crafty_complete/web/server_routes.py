@@ -1,13 +1,13 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from pydantic import BaseModel, Field
 
 from crafty_complete.auth.sessions import Session
 from crafty_complete.catalog.models import CatalogError, Loader
 from crafty_complete.crafty.client import CraftyError
 from crafty_complete.mods.adoption import AdoptionService, NoModsFolder
-from crafty_complete.mods.installer import ModOperationError
+from crafty_complete.mods.installer import MAX_UPLOAD_BYTES, ModOperationError
 from crafty_complete.web.deps import crafty_failure, require_crafty, require_session
 
 router = APIRouter(prefix="/api/servers")
@@ -140,7 +140,40 @@ async def install(
         session.crafty_token, server_id, body.project_id))
 
 
-@router.post("/{server_id}/mods/{file_name}/update", dependencies=[Depends(require_json), Depends(require_not_busy)])
+async def _jar_body(request: Request, file_name: str) -> bytes:
+    """The raw request body, refused unless it is binary and at most MAX_UPLOAD_BYTES.
+
+    Cross-site forms cannot send application/octet-stream.
+    """
+    content_type = request.headers.get("content-type", "").split(";")[0].strip()
+    if content_type != "application/octet-stream":
+        raise HTTPException(status_code=415, detail="Send the jar as application/octet-stream.")
+    too_large = HTTPException(status_code=413, detail=(
+        f"{file_name} is larger than 90 MiB; upload it in Crafty instead."))
+    if int(request.headers.get("content-length") or 0) > MAX_UPLOAD_BYTES:
+        raise too_large
+    data = bytearray()
+    async for chunk in request.stream():
+        data.extend(chunk)
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise too_large
+    return bytes(data)
+
+
+@router.post("/{server_id}/mods/upload", dependencies=[Depends(require_not_busy)])
+async def upload_mod(
+    server_id: ServerId,
+    file_name: Annotated[str, Query(max_length=255)],
+    request: Request,
+    session: Session = Depends(require_session),
+) -> dict:
+    """Add a jar the user dropped on the page to mods/ (one file per request)."""
+    data = await _jar_body(request, file_name)
+    return await _run(request, session, lambda installer: installer.upload(
+        session.crafty_token, server_id, file_name, data))
+
+
+@router.post("/{server_id}/mods/{file_name}/update",dependencies=[Depends(require_json), Depends(require_not_busy)])
 async def update(
     server_id: ServerId,
     file_name: str,

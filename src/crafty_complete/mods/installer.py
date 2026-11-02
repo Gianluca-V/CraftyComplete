@@ -15,6 +15,8 @@ MAX_PLANNED_PROJECTS = 50
 # Planned jars are held in memory until every hash is verified, so bound the batch.
 MAX_TOTAL_DOWNLOAD_BYTES = 512 * 1024 * 1024
 RESCAN_HINT = " If an earlier attempt timed out, rescan the server and try again."
+# Crafty (Tornado) refuses bodies over 100 MB; bigger jars go through Crafty itself.
+MAX_UPLOAD_BYTES = 90 * 1024 * 1024
 
 
 def _size(n: int) -> str:
@@ -633,3 +635,47 @@ class ModInstaller:
                 "restart_required": True,
                 "server": self._store.get(server_id).to_dict(),
             }
+
+    # --- uploads ------------------------------------------------------------
+
+    async def upload(self, token: str, server_id: str, file_name: str, data: bytes) -> dict:
+        """Put a jar the user has into mods/ and record it like a scan would."""
+        if not _safe_file_name(file_name):
+            raise ModOperationError(422, f"{file_name[:80]!r} is not a plain .jar name: use "
+                                         "ASCII characters and no folders.")
+        if not data:
+            raise ModOperationError(422, f"{file_name} is empty.")
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise ModOperationError(413, f"{file_name} is larger than 90 MiB; upload it in "
+                                         "Crafty instead.")
+        async with self._locks(server_id):
+            await self._adoption.ensure_file_access(token, server_id)
+            if not self._store.get(server_id).adopted:
+                raise ModOperationError(409, "Adopt this server first.")
+            existing = {e.name for e in await self._crafty.list_dir(token, server_id, MODS_DIR)}
+            if file_name in existing:
+                raise ModOperationError(409, f"{MODS_DIR}/{file_name} already exists; remove it "
+                                             "first or rename your file.")
+            await self._crafty.upload_file(token, server_id, MODS_DIR, file_name, data)
+            # Same path as a scan: the jars already recorded plus the new one, so pins and
+            # dependency marks are kept.
+            hashes = {m.file_name: m.sha1 for m in self._store.get(server_id).mods}
+            hashes[file_name] = hashlib.sha1(data).hexdigest()
+            try:
+                server = await self._adoption.record(server_id, hashes)
+            except CatalogError:
+                return {"file_name": file_name, "title": None, "state": "unknown",
+                        "warnings": [f"{file_name} was uploaded, but Modrinth could not be "
+                                     "reached to identify it; rescan the server to list it."],
+                        "restart_required": True}
+        mod = next(m for m in server.mods if m.file_name == file_name)
+        warnings = []
+        if mod.server_side == "unsupported":
+            warnings.append(f"{mod.title} is a client-only mod on Modrinth; the server may "
+                            "not start with it.")
+        for other in server.mods:
+            if other.file_name != file_name and mod.project_id and other.project_id == mod.project_id:
+                warnings.append(f"{other.file_name} is the same mod ({mod.title}); keep only "
+                                "one of them.")
+        return {"file_name": file_name, "title": mod.title, "state": mod.state,
+                "warnings": warnings, "restart_required": True}
