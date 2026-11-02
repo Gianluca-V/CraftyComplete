@@ -4,6 +4,10 @@ const serverId = $("server-page").dataset.serverId;
 const base = `/api/servers/${encodeURIComponent(serverId)}`;
 // Updates available (excluding pinned mods) in the last render.
 let updateCount = 0;
+// Mods of the last render, for the confirmation dialogs.
+let currentMods = [];
+// The linked modpack version of the last loadModpack(), or null.
+let linkedModpack = null;
 
 function setStatus(message, isError = false) {
   $("status").textContent = message;
@@ -123,6 +127,7 @@ function render(data) {
       el("strong", {}, String(c.updates)), c.updates === 1 ? " update available" : " updates available"),
     el("span", {}, el("strong", {}, String(c.pinned)), " pinned"));
   $("summary").hidden = false;
+  currentMods = data.mods;
   $("mod-rows").replaceChildren(...data.mods.map(renderMod));
   filterMods();
   $("mod-table").hidden = data.mods.length === 0;
@@ -243,6 +248,7 @@ async function loadModpack() {
   $("modpack-link-form").hidden = Boolean(status.linked);
   if (!status.linked) return;
   const { linked, latest } = status;
+  linkedModpack = linked;
   $("modpack-info").replaceChildren(
     el("strong", {}, linked.title), ` ${linked.version_number}`,
     status.update_available
@@ -342,13 +348,11 @@ async function init() {
     const select = $("modpack-link-version");
     startJob(`${base}/modpack/link`, { project_id: select.dataset.projectId, version_id: select.value });
   });
-  $("modpack-update").addEventListener("click", () =>
-    startJob(`${base}/modpack/update`, { version_id: $("modpack-version").value }));
+  $("modpack-update").addEventListener("click", () => openModpackUpdateDialog());
   $("scan").addEventListener("click", scan);
   $("mod-search").addEventListener("input", filterMods);
   $("check-updates").addEventListener("click", checkUpdates);
-  $("update-all").addEventListener("click", () =>
-    runAction($("update-all"), `${base}/update-all`, "Updating every unpinned mod…"));
+  $("update-all").addEventListener("click", () => openUpdateAllDialog());
   await Promise.all([loadServerName(), loadGameVersions()]);
   try {
     const data = await api(`${base}/mods`);

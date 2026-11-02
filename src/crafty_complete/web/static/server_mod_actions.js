@@ -117,3 +117,44 @@ async function openRemoveDialog(mod) {
     }, `Removing ${title}…`);
   });
 }
+
+function dialogList(items) {
+  return el("ul", { class: "dialog-list" }, ...items.map((text) => el("li", {}, text)));
+}
+
+/** Ask before Update all: which mods move to which version. */
+function openUpdateAllDialog() {
+  const updates = currentMods.filter((mod) => mod.update_available && !mod.pinned);
+  if (!updates.length) return;
+  const pinned = currentMods.filter((mod) => mod.update_available && mod.pinned).length;
+  const body = [
+    el("p", {}, `${updates.length} mod${updates.length === 1 ? "" : "s"} will be updated:`),
+    dialogList(updates.map((mod) =>
+      `${mod.title || mod.file_name}: ${mod.version_number || "?"} → ${mod.latest_version_number}`)),
+    el("p", { class: "muted" },
+      (pinned ? `${pinned} pinned mod${pinned === 1 ? " stays" : "s stay"} as they are. ` : "")
+      + "New required dependencies are installed too. Changes load the next time the server starts."),
+  ];
+  openDialog("Update all mods?", `Update ${updates.length}`, body, async () => {
+    // The table shows the progress; the dialog closes right away.
+    runAction($("update-all"), `${base}/update-all`, "Updating every unpinned mod…");
+  });
+}
+
+/** Ask before moving the server to another version of its modpack. */
+function openModpackUpdateDialog() {
+  const select = $("modpack-version");
+  const target = select.selectedOptions[0];
+  if (!target || !linkedModpack) return;
+  const body = [
+    el("p", {}, el("strong", {}, linkedModpack.title), ` ${linkedModpack.version_number} → `,
+      el("strong", {}, target.textContent)),
+    el("p", { class: "muted" },
+      "Stop the server in Crafty first. The pack's files are replaced; replaced and removed "
+      + "files are moved to .crafty-complete/backups on the server, and mods you added "
+      + "yourself stay installed. This can take several minutes."),
+  ];
+  openDialog("Change modpack version?", "Change version", body, async () => {
+    startJob(`${base}/modpack/update`, { version_id: target.value });
+  });
+}
