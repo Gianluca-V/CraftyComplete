@@ -8,8 +8,9 @@ from crafty_complete.mods.locks import ServerLocks
 FILES_FORBIDDEN = "You do not have file access to this server in Crafty."
 MAX_TEXT_BYTES = 1024 * 1024
 MAX_PATH_LENGTH = 512
-# Server-relative paths only: no control characters or backslashes.
-UNSAFE_PATH = re.compile(r"[\x00-\x1f\x7f\\]")
+# Server-relative paths only: no control characters, backslashes or Windows drive and
+# stream separators (":").
+UNSAFE_PATH = re.compile(r"[\x00-\x1f\x7f-\x9f\\:]")
 
 
 class FileError(Exception):
@@ -27,7 +28,8 @@ def check_path(path: str, folder: bool = False) -> str:
         return path
     parts = path.split("/")
     if (not path or len(path) > MAX_PATH_LENGTH or UNSAFE_PATH.search(path)
-            or any(part in ("", ".", "..") for part in parts)):
+            # Parts of dots only, or with surrounding spaces, which Windows trims.
+            or any(not part.strip(".") or part != part.strip() for part in parts)):
         raise FileError(422, f"{path[:80]!r} is not a valid path inside the server folder.")
     return path
 
@@ -96,6 +98,10 @@ class FileEditor:
                     sha256: str) -> dict[str, Any]:
         """Replace a text file, unless it changed since it was read with hash `sha256`."""
         path = check_path(path)
+        # Crafty takes the upload's folder and name in HTTP headers, which are ASCII.
+        if not path.isascii():
+            raise FileError(422, f"{path} cannot be saved: Crafty only accepts uploads to "
+                                 "paths made of ASCII characters.")
         if "\x00" in content:
             raise FileError(422, "The content must be text without NUL characters.")
         async with self._locks(server_id):

@@ -231,7 +231,9 @@ def test_saving_is_refused_while_a_modpack_update_runs(crafty):
 
 BAD_PATHS = ["../server.properties", "config/../../etc/passwd", "/etc/passwd",
              "config\\sodium.json", "config//sodium.json", "./server.properties",
-             "config/", "a\x00b", "a\nb", "x" * 513]
+             "config/", "a\x00b", "a\nb", "x" * 513,
+             "C:/Windows/win.ini", "C:", "D:x.txt", "a/b:stream",
+             ".../x", ".. /x", " server.properties", "server.properties "]
 
 
 @pytest.mark.parametrize("bad", BAD_PATHS)
@@ -245,6 +247,22 @@ def test_unsafe_paths_never_reach_crafty(crafty, bad):
 
     assert [r.status_code for r in responses] == [422, 422, 422]
     assert crafty.calls == 0
+
+
+def test_a_file_with_a_non_ascii_name_opens_but_saving_it_is_refused():
+    data = b"key=value\n"
+    crafty = FakeCrafty(files={"config/café.toml": data})
+    with client_for(crafty) as client:
+        opened = client.get(CONTENT, params={"path": "config/café.toml"})
+        response = save(client, "config/café.toml", "key=other\n", sha256(data))
+
+    assert opened.status_code == 200
+    assert response.status_code == 422
+    assert response.json()["detail"] == (
+        "config/café.toml cannot be saved: Crafty only accepts uploads to paths "
+        "made of ASCII characters.")
+    assert crafty.uploads == []
+    assert crafty.files["config/café.toml"] == data
 
 
 def test_opening_or_saving_the_root_is_refused(crafty):
