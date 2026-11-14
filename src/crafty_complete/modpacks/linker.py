@@ -149,7 +149,7 @@ class ModpackLinker:
         workdir = self.workdir()
         try:
             server = self._store.get(server_id)
-            _, _, files = await self.pack_files(job, target, server, workdir)
+            _, index, files = await self.pack_files(job, target, server, workdir)
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
 
@@ -159,11 +159,32 @@ class ModpackLinker:
             self._store.set_modpack_files(server_id, files)
             server = self._store.get(server_id)
 
-        on_server = {m.sha1 for m in server.mods}
+        # A server installed from another source (CurseForge, a server pack) holds the
+        # pack's jars under the same names with other bytes: match by path as well, like
+        # the updater does.
+        on_server = {m.sha1 for m in server.mods} | {f"mods/{m.file_name}" for m in server.mods}
         in_pack = {sha1 for sha1 in files.values() if sha1}
+        pack_paths = ({f.path for f in index.server_files + index.client_files}
+                      | set(index.overrides))
+        other_builds, client_only, own_mods = [], [], []
+        for mod in server.mods:
+            path = f"mods/{mod.file_name}"
+            if mod.sha1 in in_pack:
+                continue
+            if path in files:
+                other_builds.append(path)
+            elif path in pack_paths:  # the pack ships it for clients only
+                client_only.append(path)
+            else:
+                own_mods.append(mod.file_name)
         job.result = {
             # Pack mods the server does not have (they arrive with the next update).
-            "missing": sorted(p for p, h in files.items() if is_mod_jar(p) and h not in on_server),
+            "missing": sorted(p for p, h in files.items()
+                              if is_mod_jar(p) and h not in on_server and p not in on_server),
             # Mods the user added on top of the pack; updates never touch them.
-            "own_mods": sorted(m.file_name for m in server.mods if m.sha1 not in in_pack),
+            "own_mods": sorted(own_mods),
+            # The pack's mods, as another build than the pack's (same file name).
+            "other_builds": sorted(other_builds),
+            # Jars the pack ships for clients only, found on the server.
+            "client_only": sorted(client_only),
         }

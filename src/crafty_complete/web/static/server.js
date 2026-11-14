@@ -316,6 +316,8 @@ function describeResult(result) {
     if (result.restart_required) parts.push(el("strong", {}, "Start the server in Crafty to apply the update."));
   } else {
     if (result.own_mods.length) parts.push(`Mods you added yourself: ${result.own_mods.join(", ")}. `);
+    if (result.other_builds.length) parts.push(`Pack mods with another build on the server (same file name): ${result.other_builds.join(", ")}. `);
+    if (result.client_only.length) parts.push(`Client-only pack mods found on the server: ${result.client_only.join(", ")}. `);
     if (result.missing.length) parts.push(`Pack files not on the server: ${result.missing.join(", ")}.`);
   }
   return parts;

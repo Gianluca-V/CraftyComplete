@@ -64,6 +64,8 @@ def test_links_an_adopted_server_to_a_modpack_version(tmp_path, db):
     assert job["result"] == {
         "missing": ["mods/pack-only.jar"],
         "own_mods": ["custom.jar", "sodium.jar"],
+        "other_builds": [],
+        "client_only": [],
     }
     assert mods["modpack"] == {"project_id": "PM", "title": "A Pack",
                                "version_id": PACK_VERSION_ID, "version_number": "1.0.0"}
@@ -90,6 +92,31 @@ def test_link_skips_client_only_pack_files(tmp_path, db):
     assert job["status"] == "succeeded", job
     assert "mods/pack-only.jar" not in stored
     assert job["result"]["missing"] == []
+
+
+def test_link_counts_pack_files_by_path_not_only_by_hash(tmp_path, db):
+    # A server installed from another source (CurseForge, a server pack) has the pack's
+    # jars under the same names with other bytes, and the pack's client-only jars too.
+    pack = build_mrpack(files=[
+        pack_file("mods/fabric-api.jar", FABRIC_API),
+        pack_file("mods/custom.jar", b"the-pack-build"),
+        pack_file("mods/sodium.jar", FILES["mods/sodium.jar"], server="unsupported"),
+    ], entries={})
+    fakes = CreationFakes(pack=pack)
+    client = adopted_client(fakes, db, tmp_path)
+    job = wait_for(client, link(client).json()["job_id"])
+    stored = client.app.state.adoption_store.get_modpack_files(SERVER)
+    client.__exit__(None, None, None)
+
+    assert job["status"] == "succeeded", job
+    assert job["result"] == {
+        "missing": [],
+        "own_mods": [],
+        "other_builds": ["mods/custom.jar"],
+        "client_only": ["mods/sodium.jar"],
+    }
+    assert stored == {"mods/fabric-api.jar": sha1(FABRIC_API),
+                      "mods/custom.jar": sha1(b"the-pack-build")}
 
 
 def test_link_refuses_another_minecraft_version(tmp_path, db):
